@@ -1,0 +1,92 @@
+name: real-reviews
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-real_reviews}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-real_reviews}
+      POSTGRES_DB: ${POSTGRES_DB:-real_reviews}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - real_reviews
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: real-reviews-migrate-dev
+    build:
+      context: ../backend
+      target: development
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    networks:
+      - real_reviews
+
+  api:
+    image: real-reviews-api-dev
+    build:
+      context: ../backend
+      target: development
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      SERPAPI_DEFAULT_REVIEW_LIMIT: ${SERPAPI_DEFAULT_REVIEW_LIMIT:-50}
+      SERPAPI_REVIEW_SORT: ${SERPAPI_REVIEW_SORT:-newestFirst}
+      SERPAPI_LANGUAGE: ${SERPAPI_LANGUAGE:-en}
+      SERPAPI_MONTHLY_REQUEST_BUDGET: ${SERPAPI_MONTHLY_REQUEST_BUDGET:-225}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - real_reviews
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    image: real-reviews-frontend-dev
+    build:
+      context: ../frontend
+      target: development
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+      VITE_GOOGLE_MAPS_BROWSER_API_KEY: ${VITE_GOOGLE_MAPS_BROWSER_API_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - real_reviews
+
+networks:
+  real_reviews:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  frontend_node_modules:
+  frontend_pnpm_store:
+  backend_venv:
+  backend_uv_cache:

@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #F7F4EE;
+  color: #24313A;
+}
+
+body {
+  background: #F7F4EE;
+  color: #24313A;
+}
+
+gmp-place-autocomplete {
+  width: 100%;
+  color-scheme: light;
+  color: #24313A;
+  --md-sys-color-surface: #FFFDFC;
+  --md-sys-color-on-surface: #24313A;
+  --md-sys-color-on-surface-variant: #6B7378;
+  --md-sys-color-primary: #B7462D;
+}
+
+.pac-container,
+.pac-item,
+.pac-item-query {
+  background: #FFFDFC;
+  color: #24313A;
+}
+
+.pac-item:hover {
+  background: #F1ECE4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
