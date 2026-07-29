@@ -1,0 +1,30 @@
+# local secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# frontend
+frontend/node_modules/
+frontend/.pnpm-store/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# backend
+backend/.venv/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/.mypy_cache/
+backend/htmlcov/
+backend/.coverage
+__pycache__/
+*.py[cod]
+
+# docker/cache
+*.log

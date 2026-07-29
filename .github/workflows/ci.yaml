@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Compose config
+        run: |
+          docker compose -f docker/compose.yaml -f docker/compose.override.yaml config >/tmp/compose.yaml
+          POSTGRES_USER=real_reviews \
+          POSTGRES_PASSWORD=real_reviews \
+          POSTGRES_DB=real_reviews \
+          DATABASE_URL=postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews \
+          FRONTEND_ORIGIN=http://localhost:8080 \
+          GOOGLE_MAPS_SERVER_API_KEY=dummy \
+          SERPAPI_API_KEY=dummy \
+          LLM_BASE_URL=http://llm.example/v1 \
+          LLM_MODEL=dummy \
+          LLM_API_KEY=dummy \
+          docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config >/tmp/compose-prod.yaml
+      - name: Build development images
+        run: docker compose -f docker/compose.yaml -f docker/compose.override.yaml build api migrate frontend
+      - name: Backend lint and tests
+        run: |
+          docker run --rm real-reviews-api-dev uv run ruff check .
+          docker run --rm real-reviews-api-dev uv run pytest
+      - name: Frontend build and tests
+        run: |
+          docker build --target build -t real-reviews-frontend-build ./frontend
+          docker run --rm real-reviews-frontend-dev pnpm test
