@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=1, le=300)
     llm_max_concurrency: int = Field(default=2, ge=1, le=20)
     llm_batch_max_chars: int = Field(default=18000, ge=1000, le=100000)
+    llm_name_batch_max_candidates: int = Field(default=100, ge=1, le=1000)
 
     http_timeout_seconds: int = Field(default=20, ge=1, le=120)
 

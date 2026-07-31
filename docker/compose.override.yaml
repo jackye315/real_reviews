@@ -26,11 +26,14 @@ services:
       - "5173:5173"
     volumes:
       - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
       - ../frontend/index.html:/app/index.html
       - ../frontend/package.json:/app/package.json
       - ../frontend/pnpm-lock.yaml:/app/pnpm-lock.yaml
       - ../frontend/vite.config.ts:/app/vite.config.ts
       - ../frontend/vitest.config.ts:/app/vitest.config.ts
+      - ../frontend/playwright.config.ts:/app/playwright.config.ts
+      - ../frontend/e2e:/app/e2e
       - ../frontend/tsconfig.json:/app/tsconfig.json
       - ../frontend/tsconfig.app.json:/app/tsconfig.app.json
       - ../frontend/tsconfig.node.json:/app/tsconfig.node.json
@@ -40,3 +43,27 @@ services:
       - frontend_node_modules:/app/node_modules
       - frontend_pnpm_store:/pnpm/store
     command: ["sh", "-c", "pnpm install --frozen-lockfile --store-dir /pnpm/store && pnpm dev --host 0.0.0.0"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5173 >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.62.1-noble
+    profiles: ["e2e"]
+    working_dir: /app
+    environment:
+      PLAYWRIGHT_BASE_URL: http://frontend:5173
+      CI: "1"
+    volumes:
+      - ../frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_pnpm_store:/pnpm/store
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks:
+      - real_reviews
+    command: ["sh", "-c", "corepack enable && corepack prepare pnpm@9.15.4 --activate && pnpm install --frozen-lockfile --store-dir /pnpm/store && pnpm test:e2e"]

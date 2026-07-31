@@ -27,6 +27,7 @@ vi.mock('./components/Autocomplete', () => ({
 vi.mock('./lib/api', () => ({
   filterReviews: vi.fn(),
   getProviderUsage: vi.fn(),
+  getReviewFilterOptions: vi.fn(),
   getReviews: vi.fn(),
   persistSearchResult: vi.fn(),
   persistSelection: vi.fn(),
@@ -95,8 +96,32 @@ beforeEach(() => {
   })
   vi.mocked(api.persistSearchResult).mockImplementation(async (item) => place(item.google_place_id, item.display_name))
   vi.mocked(api.persistSelection).mockResolvedValue(place('auto-place', 'Autocomplete Cafe'))
-  vi.mocked(api.getReviews).mockResolvedValue({ reviews: [], total: 0, topics: [], topics_fetched_at: null })
-  vi.mocked(api.filterReviews).mockResolvedValue([])
+  vi.mocked(api.getReviews).mockResolvedValue({ reviews: [], total: 0, filtered_total: 0, topics: [], topics_fetched_at: null })
+  vi.mocked(api.getReviewFilterOptions).mockResolvedValue({
+    reviewer_label_options: [
+      { value: 'chinese', label: 'Chinese' },
+      { value: 'korean', label: 'Korean' },
+      { value: 'japanese', label: 'Japanese' },
+      { value: 'american', label: 'American' },
+      { value: 'hispanic', label: 'Hispanic' },
+      { value: 'indian', label: 'Indian' }
+    ]
+  })
+  vi.mocked(api.filterReviews).mockResolvedValue({
+    reviews: [review()],
+    total: 1,
+    candidate_count: 1,
+    filtered_total: 1,
+    selected_review_ids: ['review-1'],
+    skipped_missing_label_count: 0,
+    rating_filter: null,
+    reviewer_label_filter: null,
+    content_filter: 'outdoor seating',
+    sort: 'recent',
+    llm_used: true,
+    topics: [],
+    topics_fetched_at: null
+  })
   vi.mocked(api.getProviderUsage).mockResolvedValue([
     {
       id: 'usage-1',
@@ -153,6 +178,7 @@ describe('App split workspace', () => {
     vi.mocked(api.getReviews).mockResolvedValueOnce({
       reviews: [review()],
       total: 1,
+      filtered_total: 1,
       topics: [{ provider_topic_id: '/m/outdoor', keyword: 'outdoor seating', mentions: 24, language_code: 'en', rank: 0 }],
       topics_fetched_at: new Date(0).toISOString()
     })
@@ -164,14 +190,147 @@ describe('App split workspace', () => {
     expect(await screen.findByText(/mentioned in reviews/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /outdoor seating \(24\)/i }))
     expect(screen.getByPlaceholderText(/mentions spicy noodles/i)).toHaveValue('outdoor seating')
-    await waitFor(() => expect(api.filterReviews).toHaveBeenCalledWith('outdoor seating', expect.any(Array)))
+    await waitFor(() => expect(api.filterReviews).toHaveBeenCalledWith('place-1', expect.objectContaining({ content_filter: 'outdoor seating', sort: 'recent' })))
+  })
+
+  it('shows visible progress and a concrete summary for a review refresh', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 1,
+      filtered_total: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    let finishRefresh: ((value: Awaited<ReturnType<typeof api.refreshReviews>>) => void) | undefined
+    vi.mocked(api.refreshReviews).mockImplementation(
+      () => new Promise((resolve) => {
+        finishRefresh = resolve
+      })
+    )
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    await screen.findByText('Great outdoor seating.')
+    fireEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
+    expect(await screen.findByText(/refreshing reviews from serpapi/i)).toBeInTheDocument()
+
+    finishRefresh?.({
+      place_id: 'place-1',
+      status: 'completed',
+      collected_unique_count: 2,
+      successful_request_count: 1,
+      pagination_cursor: null,
+      stop_reason: 'known_unchanged_streak',
+      reviews: [review()],
+      topics: [{ provider_topic_id: '/m/food', keyword: 'food', mentions: 3, language_code: 'en', rank: 0 }],
+      topics_fetched_at: new Date(0).toISOString(),
+      fallback_used: false,
+      message: null
+    })
+
+    expect(await screen.findByText(/refresh completed: 2 new review\(s\), 1 stored review\(s\), 1 topic\(s\), and 1 upstream request\(s\)/i)).toBeInTheDocument()
+  })
+
+  it('shows refresh failures in the restaurant review pane', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 1,
+      filtered_total: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    vi.mocked(api.refreshReviews).mockRejectedValueOnce(new Error('Internal Server Error'))
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    await screen.findByText('Great outdoor seating.')
+    fireEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
+
+    expect(await screen.findByText(/refresh failed: internal server error/i)).toBeInTheDocument()
+  })
+
+  it('refetches stored reviews for exact rating and sort controls and reset restores defaults', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 2,
+      filtered_total: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    await screen.findByLabelText(/exact rating/i)
+    expect(screen.getByText(/1 of 2 reviews/i)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/exact rating/i), { target: { value: '4' } })
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'recent'))
+
+    expect(await screen.findByLabelText(/reviewer label/i)).toHaveDisplayValue('Any reviewer label')
+    fireEvent.change(await screen.findByLabelText(/review sort/i), { target: { value: 'rating_high' } })
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'rating_high'))
+
+    fireEvent.click(await screen.findByRole('button', { name: /reset/i }))
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', null, 'recent'))
+  })
+
+  it('loads reviewer-label options from backend and submits unified label filter', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 1,
+      filtered_total: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    const reviewerSelect = await screen.findByLabelText(/reviewer label/i)
+    await screen.findByRole('option', { name: 'Chinese' })
+    expect(api.getReviewFilterOptions).toHaveBeenCalled()
+    fireEvent.change(reviewerSelect, { target: { value: 'chinese' } })
+
+    await waitFor(() => expect(api.filterReviews).toHaveBeenCalledWith('place-1', expect.objectContaining({
+      reviewer_label: 'chinese',
+      content_filter: null,
+      sort: 'recent'
+    })))
+  })
+
+  it('keeps deterministic reviews visible when semantic filtering fails', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 1,
+      filtered_total: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    vi.mocked(api.filterReviews).mockRejectedValueOnce(new Error('LLM timeout'))
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    expect(await screen.findByText('Great outdoor seating.')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText(/mentions spicy noodles/i), { target: { value: 'patio' } })
+    fireEvent.click(screen.getByRole('button', { name: /^filter$/i }))
+
+    expect(await screen.findByText(/couldn’t apply the new filter/i)).toBeInTheDocument()
+    expect(screen.getByText('Great outdoor seating.')).toBeInTheDocument()
   })
 
   it('opens direct autocomplete selection in the review workspace', async () => {
     renderApp()
     fireEvent.click(screen.getByRole('button', { name: /mock autocomplete select/i }))
     expect(await screen.findByRole('heading', { name: 'Autocomplete Cafe' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /back to results/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /results/i })).toBeInTheDocument()
   })
 
   it('queries provider usage lazily from the developer drawer', async () => {
@@ -183,10 +342,12 @@ describe('App split workspace', () => {
     expect(api.getProviderUsage).toHaveBeenCalledTimes(1)
   })
 
-  it('supports mobile-style back navigation from reviews to results', async () => {
+  it('supports mobile-style back navigation from search-result reviews to preserved results', async () => {
     renderApp()
-    fireEvent.click(screen.getByRole('button', { name: /mock autocomplete select/i }))
-    fireEvent.click(await screen.findByRole('button', { name: /back to results/i }))
-    expect(screen.getByText(/search results will appear here/i)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+    fireEvent.click(await screen.findByRole('button', { name: /results/i }))
+    expect(await screen.findByText('Second Sushi')).toBeInTheDocument()
   })
 })

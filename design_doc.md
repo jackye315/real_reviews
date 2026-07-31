@@ -34,7 +34,7 @@ The LLM may filter reviews using information explicitly present in review text, 
 - Atmosphere
 - Family friendliness
 
-The application will not infer race, ethnicity, or other sensitive traits from reviewer names, photos, language, profiles, or presumed locations. Author profile information will not be sent to the LLM.
+The application will not infer race, ethnicity, or other sensitive traits from reviewer labels, photos, language, profiles, or presumed locations. Author profile information will not be sent to the LLM.
 
 Google and SerpApi review retrieval is best-effort. SerpApi pagination can return substantially more than five reviews, but it does not guarantee that every review displayed by Google will be available.
 
@@ -82,18 +82,63 @@ The initial SerpApi fetch target is 50 reviews. The value must be configurable r
 
 Review filtering is data-dependent rather than always visible:
 
-1. Selecting a restaurant with no stored reviews shows its details and a primary "Fetch reviews" action. Topic chips, the natural-language filter, and rating/date controls remain hidden.
+1. Selecting a restaurant with no stored reviews shows its details and a primary "Fetch reviews" action. Topic chips, the natural-language filter, reviewer-label dropdown, and deterministic rating/sort controls remain hidden.
 2. The first SerpApi review request returns the initial review page and, when Google exposes them, restaurant-specific review topics. The backend persists both before returning the synchronization response.
-3. Once at least one review is stored, show the natural-language filter and rating/date controls.
+3. Once at least one review is stored, show the exact-rating control, always-visible reviewer-label dropdown, sort control, and natural-language content filter.
 4. Show topic chips only when saved topics exist for that restaurant. Never substitute a global hard-coded topic list.
 5. When saved reviews and topics already exist, show them immediately on restaurant selection without making an upstream request. A manual refresh may replace the saved topic snapshot.
 6. If reviews exist but SerpApi returned no topics, show the regular filtering controls without a topic row.
+
+The deterministic controls are separate from the LLM filter and never call the LLM:
+
+- Rating: any rating or exactly 5, 4, 3, 2, or 1 star. Selecting 4 stars means `rating = 4`; it never means 4 stars and above.
+- Sort: most recent, oldest, highest rated, or lowest rated.
+- Default state: any rating, sorted most recent.
+- Result feedback: show `filtered_total of total reviews`.
+- Reset: restore any rating, any reviewer label, and most recent sorting and clear the content-filter query and active semantic result.
+
+Reviews with a missing rating remain visible only under "Any rating." Reviews with a missing publication timestamp or rating sort after reviews with the requested sortable value. Most recent and oldest refer to the review publication timestamp, not fetch time or edit time.
+
+Changing the exact-rating filter changes the LLM candidate set, so it clears any existing LLM-selected IDs rather than presenting stale semantic results. Changing the reviewer-label selection clears the prior label result and runs the label filter for the new allowlisted value; selecting `Any reviewer label` removes the label constraint without an LLM request. Changing only the sort order preserves active semantic results because membership has not changed. Selecting another restaurant restores any rating, any reviewer label, an empty content query, and most-recent sorting.
 
 Each topic chip represents a topic supplied in the SerpApi Google Maps Reviews response, not a verified restaurant attribute. A topic contains a localized keyword, mention count, and provider topic ID. The UI should label the group "Mentioned in reviews" or "Review topics" so users do not confuse topics with restaurant amenities.
 
 Clicking a topic chip in v1 places its keyword into the existing filter request and filters the reviews already stored in PostgreSQL. It does not make a new SerpApi request. The provider topic ID is retained so a future feature can request Google's exact topic-filtered result set with `topic_id`; such a request would be a separately metered SerpApi search and is not part of the initial implementation.
 
-Reviews will be sent to the LLM in token-bounded batches. The model will receive only:
+Reviewer-label filtering is an always-visible dropdown beside the exact-rating and sort controls, not a free-text field and not a mutually exclusive filter mode. The initial options are:
+
+- `Any reviewer label`
+- `Jack`
+- `David`
+- `Eric`
+
+`Any reviewer label` is the default and skips label-related LLM inference. The three named values are hardcoded in one backend mapping that is the source of truth:
+
+```python
+REVIEWER_LABEL_OPTIONS = {
+    "jack": "Jack",
+    "david": "David",
+    "eric": "Eric",
+}
+```
+
+The frontend loads this allowlist from a filter-options endpoint and renders the labels in the dropdown. It must not maintain a second independently hardcoded list. Adding another option later requires extending the backend mapping only. The backend rejects submitted label keys that are not in the allowlist.
+
+Selecting Jack, David, or Eric asks the local LLM whether each stored reviewer display name represents that explicit target name. This is not SQL name matching and does not use `LIKE`, trigram similarity, edit distance, or another fuzzy-string algorithm. SQL is used only to retrieve the selected restaurant's candidate review IDs and stored author display names.
+
+The reviewer-label prompt and payload are isolated from review-content filtering. They contain only:
+
+- Canonical review ID
+- Stored reviewer display name
+- Selected allowlisted target name
+
+They must not contain review text, rating, publication date, reviewer profile history, location, avatar, or restaurant metadata. Blank or missing display names are excluded before inference and reported as skipped rather than guessed.
+
+The model performs only a label-equivalence decision. It must not classify or infer gender, race, ethnicity, nationality, religion, age, or another personal trait. Reviewer display names are untrusted input; the prompt instructs the model to ignore instructions embedded inside a display name. Uncertain entries are excluded.
+
+The label dropdown and natural-language review-content field are independent and may both be active. When both are active, the backend runs the isolated label and content prompts and intersects their validated review-ID sets. Topic-chip selection populates the review-content filter without changing the selected reviewer-label option.
+
+For review-content filtering, reviews will be sent to the LLM in token-bounded batches. The model will receive only:
 
 - Canonical review ID
 - Review text
@@ -105,6 +150,8 @@ The model will return strict JSON containing selected review IDs. It will not ge
 If the LLM is unavailable or returns invalid data, the unfiltered reviews remain visible and the user can retry.
 
 ### 3.5 Rich review cards
+
+Implementation is tracked as [`BL-009 — Rich review data`](backlog.md#bl-009--rich-review-data). Section 20 defines the schema, API, and rendering plan; this section defines the product presentation.
 
 When SerpApi supplies the data, each review card may also show:
 
@@ -212,11 +259,54 @@ Provider usage will be removed from the normal page layout and moved into an on-
 
 #### 3.6.5 Responsive behavior
 
-- At 1024 px and wider, use the persistent split-pane workspace.
-- Between approximately 768 and 1023 px, use a narrower search pane and flexible review pane.
-- Below approximately 768 px, use one surface at a time: search/results first, then restaurant reviews with a clear `Back to results` action.
-- Preserve query, results, selected restaurant, and filter state when moving between mobile surfaces.
-- Respect `prefers-reduced-motion`; layout changes must remain understandable with transitions disabled.
+The mobile refinement is tracked as [`BL-006 — Mobile-first responsive web app and Home Screen experience`](backlog.md#bl-006--mobile-first-responsive-web-app-and-home-screen-experience). Its backlog status is authoritative.
+
+The web and installed Home Screen experiences use one React application, one component tree, and the same FastAPI endpoints. There is no separately maintained mobile home page. Responsive layout, mobile navigation, and standalone-display adjustments must wrap shared search, restaurant, filter, and review components rather than duplicating their behavior.
+
+Viewport behavior:
+
+- At 1024 px and wider, use the persistent split-pane workspace with independently scrolling search and review panes.
+- Below 1024 px, use one primary surface at a time: landing search, search results, or restaurant reviews. A large tablet in landscape may opt into the split layout only when both panes retain usable widths.
+- Use dynamic viewport units (`dvh`) with a safe fallback instead of relying exclusively on `100vh`. Account for browser chrome, standalone Home Screen mode, rotation, the iPhone status area, and the bottom Home indicator.
+- Add `viewport-fit=cover` only together with explicit `env(safe-area-inset-*)` padding. The application chrome, bottom sheets, and fixed/sticky controls must remain outside unsafe areas.
+- Avoid document-wide horizontal overflow at every supported breakpoint. Nested pane scrollers must use `min-height: 0`, clear scroll ownership, and mobile-friendly overscroll containment.
+
+Mobile navigation follows a list/detail flow:
+
+```text
+landing search
+  ├─ successful free-form search → search results
+  └─ direct restaurant selection → restaurant reviews
+
+search results
+  ├─ select restaurant → restaurant reviews
+  └─ new search → landing search
+
+restaurant reviews
+  ├─ back with saved result list → search results
+  ├─ back after direct autocomplete selection → landing search
+  └─ new search → landing search
+```
+
+- Preserve the query, results, pagination, selected restaurant, filters, and each surface's scroll position when moving between mobile surfaces.
+- Synchronize restaurant selection with browser history using `pushState`/`popstate` or a client-side router so the iOS back gesture and browser Back action return from reviews to the correct prior surface.
+- Do not send a direct autocomplete selection back to an empty result list.
+
+The mobile restaurant screen uses a compact sticky navigation bar containing Back, the truncated restaurant name, and a Filters action. Full restaurant metadata, sync/refresh actions, topic chips, and filter fields must not all occupy one tall sticky region.
+
+- On narrow screens, open deterministic and semantic filter controls in a full-width bottom sheet or another compact disclosure surface.
+- Show the applied-filter count or state from the review screen so filters remain discoverable while the sheet is closed.
+- Lay filter controls out as one column on phones, two columns on medium-width surfaces, and a horizontal toolbar only when sufficient desktop width exists.
+- Render topic chips as a horizontally scrollable, non-sticky row on narrow screens; allow wrapping on wider screens.
+- Keep review cards in the primary vertical scroll surface.
+
+All frequently used mobile controls should provide an approximately 44 by 44 CSS-pixel touch target, including application chrome actions, Back, Filters, sync/refresh, topic chips, and bottom-sheet controls. Long restaurant names, addresses, reviewer names, review text, and provider URLs must wrap or truncate without increasing page width.
+
+The developer drawer remains a right-side drawer on wide screens and becomes a safe-area-aware bottom sheet on narrow screens. Its height must use dynamic viewport sizing rather than a fixed percentage of legacy `vh`.
+
+For Home Screen installation, add a web-app manifest with the application name, short name, start URL, standalone display mode, theme/background colors, and appropriate icons, plus an Apple touch icon and theme metadata in the document head. A service worker may cache only the versioned application shell and static assets initially; API, restaurant, review, and filtering responses remain network-driven unless an explicit cache invalidation design is added.
+
+Respect `prefers-reduced-motion`; navigation and bottom-sheet state changes must remain understandable with transitions disabled.
 
 #### 3.6.6 Frontend state and component plan
 
@@ -244,13 +334,15 @@ Suggested component boundaries:
 - `SearchPane`
 - `SearchResultList`
 - `RestaurantReviewPane`
+- `MobileRestaurantBar`
+- `MobileFilterSheet`
 - `ReviewTopicChips`
 - `ReviewFilters`
 - `ReviewList`
 - `DeveloperDrawer`
 - `ProviderUsagePanel`
 
-Keep server state in TanStack Query and layout/drawer selection state in React state. Enable the reviews query only when a restaurant is selected and the provider-usage query only while the developer drawer is open.
+Keep server state in TanStack Query and layout/drawer selection state in React state. Mobile history state represents navigation only and must not become a second copy of restaurant or review server data. Enable the reviews query only when a restaurant is selected and the provider-usage query only while the developer drawer is open.
 
 #### 3.6.7 Visual palette
 
@@ -278,6 +370,12 @@ The `Real Reviews` wordmark in the top-left application chrome acts as a home ac
 - The developer drawer is keyboard-operable, focus-trapped, dismissible, and absent from the normal content hierarchy while closed.
 - Provider usage is not requested merely by loading the application.
 - Desktop panes and mobile surface navigation preserve search and filter state.
+- The iOS/browser Back action returns from restaurant reviews to saved results, or to landing after a direct autocomplete selection.
+- The mobile restaurant header remains compact; topic chips and the complete filter form never consume the review viewport as one tall sticky block.
+- Mobile controls meet the documented touch-target intent and remain reachable above safe-area insets.
+- The application uses one shared React implementation for browser and installed Home Screen modes.
+- Home Screen metadata provides the correct application name, icon, start URL, standalone display mode, theme, and background.
+- Phone, landscape-phone, tablet, and desktop viewport tests show no document-level horizontal overflow.
 - Layout transitions pass reduced-motion behavior and do not cause horizontal overflow.
 - Frontend tests cover landing, free-form results, direct selection, result selection, drawer open/close, lazy provider query, and mobile back behavior.
 
@@ -288,8 +386,10 @@ The `Real Reviews` wordmark in the top-left application chrome acts as a home ac
 3. Wire free-form search and autocomplete selection to the documented transitions while preserving existing queries and mutations.
 4. Move `ProviderUsagePanel` into `DeveloperDrawer` and make its query lazy.
 5. Add independent desktop scrolling, sticky restaurant/filter regions, mobile search/detail navigation, and state preservation.
-6. Add focus management, dialog semantics, reduced-motion handling, and overflow checks.
-7. Add component tests for the acceptance criteria before removing the old dashboard layout.
+6. Refine mobile viewport sizing, safe areas, compact sticky navigation, filter disclosure, topic overflow, and touch targets under `BL-006`.
+7. Add Home Screen manifest/icon metadata and an application-shell-only service-worker policy.
+8. Add focus management, dialog semantics, history behavior, reduced-motion handling, and overflow checks.
+9. Add component and responsive browser tests for the acceptance criteria before considering the mobile refinement complete.
 
 ## 4. System Architecture
 
@@ -359,6 +459,8 @@ The backend will support:
 - Strict output validation
 - Bounded concurrency
 - Token-aware batching
+- Separate prompts and request schemas for review-content filtering and reviewer-label equivalence
+- Batch-local review-ID allowlists for every model response
 
 ### 4.3 Provider interfaces
 
@@ -530,6 +632,8 @@ backend/
 - Host-provided secrets
 - A reverse proxy when the Oracle deployment is introduced
 
+The private Oracle/Tailscale rollout is intentionally deferred and tracked as [`BL-010`](backlog.md#bl-010--private-oracle-and-tailscale-deployment). Section 21 is authoritative for its network and operational design.
+
 The frontend and backend Dockerfiles will use multi-stage development and production targets. Production images will contain only runtime dependencies and built application artifacts.
 
 Validate every merged configuration with:
@@ -610,6 +714,8 @@ Retrieving 50 reviews normally requires approximately four successful SerpApi se
 
 ### 5.4 Load more
 
+Implementation is tracked as [`BL-008 — Review pagination and load more`](backlog.md#bl-008--review-pagination-and-load-more). The UI and API must distinguish free PostgreSQL paging from confirmed SerpApi collection as specified in Section 19.
+
 Before retrieving additional reviews:
 
 1. Ask the user for or offer a target count.
@@ -635,7 +741,167 @@ A manual refresh:
 8. Inserts newly discovered reviews.
 9. Retains provenance for every provider response used.
 
-The proposed optimization to stop requesting older pages after 10 consecutive known unchanged reviews is deferred and tracked as [`BL-001`](backlog.md#bl-001--stop-refresh-pagination-after-known-unchanged-reviews). It is not currently implemented.
+The optimization to stop requesting older pages after 10 consecutive known unchanged reviews is implemented and tracked as [`BL-001`](backlog.md#bl-001--stop-refresh-pagination-after-known-unchanged-reviews).
+
+### 5.6 Stored review filtering and sorting
+
+Exact-rating filtering and deterministic sorting extend the existing stored-review endpoint:
+
+```http
+GET /api/v1/restaurants/{place_id}/reviews?rating=4&sort=rating_high
+```
+
+This is a PostgreSQL operation expressed through SQLAlchemy. It does not call Google, SerpApi, or the LLM. The API accepts:
+
+- `rating`: optional integer from 1 through 5; equality filter only
+- `sort`: `recent`, `oldest`, `rating_high`, or `rating_low`; defaults to `recent`
+
+The route validates these values before they reach the repository. Do not accept arbitrary client-provided column names, sort directions, or raw SQL. Define an allowlisted enum:
+
+```python
+class ReviewSort(str, Enum):
+    RECENT = "recent"
+    OLDEST = "oldest"
+    RATING_HIGH = "rating_high"
+    RATING_LOW = "rating_low"
+```
+
+Map that enum to SQLAlchemy ordering expressions rather than SQL strings:
+
+```python
+REVIEW_SORTS = {
+    ReviewSort.RECENT: (
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.OLDEST: (
+        Review.publication_timestamp.asc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.RATING_HIGH: (
+        Review.rating.desc().nullslast(),
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.RATING_LOW: (
+        Review.rating.asc().nullslast(),
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+}
+```
+
+The repository starts with the selected place, applies `Review.rating == rating` only when a rating was supplied, and then applies the selected expression tuple through `order_by`. The final ID expression provides deterministic ordering when all user-visible values tie.
+
+The service returns both the total stored-review count and the exact-filtered count. Topics remain place-level data and are not filtered or reordered by these parameters.
+
+For the current unpaginated stored-review response, each control change may refetch from FastAPI immediately; no Apply button or debounce is required. The React Query cache key includes place ID, exact rating, and sort. When stored-review pagination is added, the same validated parameters remain authoritative in PostgreSQL and apply before limit/cursor pagination.
+
+Basic SQL filtering runs before optional semantic filtering. Under the unified backend pipeline in Section 5.7, the frontend sends control values rather than copying stored reviews into the request. Sorting is presentation order and does not affect which reviews either LLM prompt considers.
+
+### 5.7 Unified backend semantic filtering
+
+Replace the current top-level `POST /api/v1/reviews/filter` contract with one restaurant-scoped backend operation:
+
+```http
+POST /api/v1/restaurants/{place_id}/reviews/filter
+```
+
+Example request:
+
+```json
+{
+  "rating": 4,
+  "reviewer_label": "jack",
+  "content_filter": "mentions outdoor seating",
+  "sort": "recent"
+}
+```
+
+The fields are independently optional:
+
+- `rating`: exact integer rating from 1 through 5
+- `reviewer_label`: `null`, `jack`, `david`, or `eric`
+- `content_filter`: optional bounded natural-language review-content query
+- `sort`: the allowlisted sort enum from Section 5.6
+
+The backend owns the complete filtering pipeline:
+
+1. Load the selected restaurant and its stored reviews from PostgreSQL.
+2. Apply the optional exact-rating equality filter.
+3. If `reviewer_label` is not null, load only candidate review IDs and non-empty stored author display names, then run the isolated reviewer-label LLM prompt.
+4. If `content_filter` is present, run the isolated review-content LLM prompt over the same SQL-filtered candidate set.
+5. Parse each model response through a strict Pydantic schema containing `selected_review_ids: list[UUID]`.
+6. Validate every returned UUID against the IDs in the specific batch that produced it, reject unknown or malformed IDs, and deduplicate validated results.
+7. When both semantic filters are active, intersect their selected-ID sets.
+8. Query PostgreSQL for the selected place and validated IDs using parameterized SQLAlchemy expressions.
+9. Apply the allowlisted SQL sort.
+10. Return complete review objects, counts, applied controls, and diagnostic metadata to the frontend.
+
+The frontend does not perform the final ID intersection and does not send stored review objects back to FastAPI. It renders the `reviews` returned by this endpoint.
+
+The reviewer-label LLM receives compact, review-boundary-preserving batches:
+
+```json
+{
+  "target_label": "Jack",
+  "candidates": [
+    {
+      "review_id": "canonical-uuid",
+      "author_display_name": "stored display name"
+    }
+  ]
+}
+```
+
+Name batching uses a model-token budget plus a maximum candidate count and never splits an individual display name. Because the payload is much smaller than review-content filtering, it has an independent conservative batch limit rather than reusing the 18,000-character review-text setting.
+
+Both LLM prompts return the same strict shape:
+
+```json
+{
+  "selected_review_ids": ["canonical-uuid"]
+}
+```
+
+Do not recover IDs from prose, Markdown fences, or malformed JSON. One controlled retry may request corrected JSON; otherwise, one failed or invalid batch fails the semantic operation and leaves the deterministic SQL result visible.
+
+After UUID validation, select results using SQLAlchemy parameters rather than string-built SQL:
+
+```python
+statement = (
+    select(Review)
+    .where(
+        Review.place_id == place.id,
+        Review.id.in_(selected_ids),
+    )
+    .order_by(*REVIEW_SORTS[sort])
+)
+```
+
+An empty selected-ID set returns an empty result without constructing an empty `IN` clause. The maximum candidate count keeps the UUID list comfortably within PostgreSQL parameter limits; larger future datasets require pagination before semantic filtering.
+
+Example response:
+
+```json
+{
+  "reviews": [],
+  "total": 50,
+  "candidate_count": 12,
+  "filtered_total": 4,
+  "selected_review_ids": [],
+  "skipped_missing_name_count": 2,
+  "rating_filter": 4,
+  "reviewer_label_filter": "jack",
+  "content_filter": "mentions outdoor seating",
+  "sort": "recent",
+  "llm_used": true
+}
+```
+
+`Any reviewer label` is represented as `reviewer_label: null` and skips the label LLM stage. If neither reviewer label nor content query is active, use the deterministic `GET .../reviews` path and do not call the LLM.
+
+Reviewer-label result caching is deferred until the application has a formal `review_corpus_version` on the restaurant/place and a bounded shared cache or clearly scoped TTL/LRU. The first implementation may rerun inference on sort or repeated name-filter requests. Model decisions are not stored as durable reviewer classifications.
 
 ## 6. Persistent Data Model
 
@@ -773,15 +1039,21 @@ When both providers identify the same review:
 - `GET /api/v1/restaurants/{place_id}/reviews`
 - `POST /api/v1/restaurants/{place_id}/reviews/sync`
 - `POST /api/v1/restaurants/{place_id}/reviews/refresh`
+- `POST /api/v1/restaurants/{place_id}/reviews/filter`
 - `DELETE /api/v1/restaurants/{place_id}/reviews`
-- `POST /api/v1/reviews/filter`
+- `GET /api/v1/reviews/filter-options`
 
-`GET .../reviews`, `POST .../reviews/sync`, and `POST .../reviews/refresh` return a common review payload:
+`GET .../reviews` accepts optional `rating` and `sort` query parameters as defined in Section 5.6. The route uses a validated integer and `ReviewSort` enum and delegates filtering, ordering, and counts to the service/repository layers.
+
+The stored-review response includes the active deterministic controls and distinguishes all stored reviews from reviews matching the exact-rating filter:
 
 ```json
 {
   "reviews": [],
-  "total": 0,
+  "total": 50,
+  "filtered_total": 12,
+  "rating_filter": 4,
+  "sort": "rating_high",
   "topics": [
     {
       "provider_topic_id": "/m/example",
@@ -795,7 +1067,23 @@ When both providers identify the same review:
 }
 ```
 
+`POST .../reviews/sync` and `POST .../reviews/refresh` return the newly stored review collection in the default unfiltered, most-recent order. The frontend then invalidates/refetches the parameterized `GET .../reviews` query so active deterministic controls are reapplied consistently.
+
 The frontend must not infer review availability from the topic array. The entire filtering area is rendered only when `reviews.length > 0`. Inside that area, topic chips are optional and render only when `topics.length > 0`.
+
+`GET /reviews/filter-options` returns the backend-controlled reviewer-label allowlist:
+
+```json
+{
+  "reviewer_label_options": [
+    {"value": "jack", "label": "Jack"},
+    {"value": "david", "label": "David"},
+    {"value": "eric", "label": "Eric"}
+  ]
+}
+```
+
+`POST .../reviews/filter` accepts the unified deterministic and semantic controls, performs all candidate loading, model calls, UUID validation, SQL ID filtering, sorting, and response construction described in Section 5.7. The currently implemented top-level `POST /api/v1/reviews/filter` is replaced during this work rather than maintained as a second source of filtering behavior.
 
 ### Operations
 
@@ -838,6 +1126,8 @@ No credentials will be committed to source control.
 
 ## 10. Free-Tier and Cost Controls
 
+Cross-request atomic budget reservation, idempotency, and concurrency work is tracked as [`BL-007 — Cost and concurrency protection`](backlog.md#bl-007--cost-and-concurrency-protection) and designed in Section 18.
+
 Current global allowances as of July 2026:
 
 | Service | Free allowance |
@@ -871,7 +1161,7 @@ At approximately four SerpApi searches per initial 50-review fetch, the default 
 ## 11. Security, Privacy, and Compliance
 
 - Do not log review text, author names, author profile URLs, or browser coordinates.
-- Do not send author information to the LLM.
+- Do not send author information to the review-content LLM filter. The explicit reviewer-label filter is the sole exception and may send only canonical review IDs and stored display names under the constraints in Section 5.7.
 - Validate place IDs, query lengths, review counts, filter sizes, cursors, and request bodies.
 - Apply request and response size limits.
 - Use bounded retries only for transient upstream errors.
@@ -920,6 +1210,8 @@ SerpApi provides scraping infrastructure, not an automatic license to redistribu
 - Google and SerpApi response normalization
 - SerpApi topic normalization for populated, empty, and omitted topic fields
 - Opaque topic ID and localized keyword preservation
+- Exact-rating repository filtering, including unrated-review behavior
+- Allowlisted review-sort mapping and stable null-last tie-breakers
 - Provider interface compatibility
 - Exact-ID deduplication
 - URL-extracted-ID deduplication
@@ -930,6 +1222,10 @@ SerpApi provides scraping infrastructure, not an automatic license to redistribu
 - Ambiguous collision handling
 - LLM JSON validation and unknown-ID rejection
 - Sensitive-trait filter rejection
+- Reviewer-label allowlist validation and filter-options serialization for Jack, David, and Eric
+- Reviewer-label prompt isolation from review text and personal-trait inference
+- Reviewer-label token/count batching without splitting display names
+- Reviewer-label batch-local returned-ID validation
 - Usage-budget enforcement
 
 ### Integration tests
@@ -939,6 +1235,16 @@ SerpApi provides scraping infrastructure, not an automatic license to redistribu
 - Normal initial fetch completing within four SerpApi requests
 - Initial review synchronization persisting topics from the first request without an extra provider call
 - Refresh replacing an explicit topic snapshot while retaining the last snapshot when the field is omitted
+- Stored-review endpoint validation for ratings outside 1–5 and unknown sort values
+- Exact-rating and each deterministic sort mode against PostgreSQL
+- Correct `total` and `filtered_total` counts
+- Basic SQL filtering occurring before optional LLM filtering
+- Unified restaurant-scoped filter endpoint for deterministic-only, label-only, content-only, and combined filtering
+- Reviewer-label candidate loading using only review ID and non-empty author display name
+- Reviewer-label filtering respecting the optional exact-rating candidate filter
+- Missing reviewer labels reported as skipped without being sent to the LLM
+- Multi-batch reviewer-label result merging and all-or-nothing failure behavior
+- Strict UUID response parsing, batch-local allowlists, parameterized SQL ID filtering, and empty-ID behavior
 - Invalid and expired pagination tokens
 - Empty SerpApi results and Google fallback
 - Partial synchronization recovery
@@ -959,11 +1265,31 @@ SerpApi provides scraping infrastructure, not an automatic license to redistribu
 - Restaurant-specific topic rendering with no hard-coded fallback topics
 - Reviews-without-topics state retaining free-form and rating filters
 - Topic click populating the local filter without a SerpApi request
+- Exact 1–5-star filtering without minimum-rating behavior
+- Most-recent, oldest, highest-rated, and lowest-rated ordering
+- Null-rating and null-date placement, stable ties, and result-count display
+- Rating changes clearing stale semantic IDs while sort changes preserve them
+- Review-query cache keys including place, rating, and sort
+- Always-visible reviewer-label dropdown with Any, Jack, David, and Eric
+- Any reviewer label skipping label-related LLM inference
+- Reviewer-label and review-content controls operating independently
+- Combined label/content results returned by the backend while preserving exact rating and SQL sort
+- Topic-chip selection preserving the reviewer-label dropdown value
+- Review refresh invalidating cached semantic results while sort-only changes reuse them
 - Load-more cost confirmation
 - Usage-limit messaging
 - LLM filtering and fallback
 - Google attribution visibility
 - Responsive layouts and accessibility
+- Mobile list/detail navigation at 390×844, including Back/popstate behavior and preserved result/filter state
+- Landscape-phone layout at 844×390 without clipped or unreachable controls
+- Tablet layout at 768×1024 and desktop split layout at 1280×800
+- No document-level horizontal overflow at the supported responsive viewports
+- Dynamic viewport-height and safe-area behavior in browser and standalone display modes
+- Compact mobile restaurant navigation with non-sticky topic/filter content
+- One-column phone, two-column medium, and wide-screen filter layouts
+- Home Screen manifest metadata, icons, standalone start URL, and application-shell cache policy
+- Minimum mobile touch-target intent for primary navigation and actions
 
 ### Container verification
 
@@ -1280,17 +1606,60 @@ After the July 28, 2026 source-level audit, the following corrective changes wer
 - Moved Compose files into `docker/` and adjusted build contexts, env-file paths, and development bind mounts.
 - Added the root `Makefile` for common Docker commands including `make up`, `make down`, `make down-volumes`, validation, builds, migrations, lint, and tests.
 
+#### 16.9.9 Exact-star filtering and deterministic review sorting
+
+- Added validated `rating` and `sort` query parameters to `GET /api/v1/restaurants/{place_id}/reviews`.
+- Added the backend `ReviewSort` allowlist with `recent`, `oldest`, `rating_high`, and `rating_low` values.
+- Mapped sort values to SQLAlchemy expressions with null-last behavior and review-ID tie breakers rather than client-provided SQL or column names.
+- Added exact-rating repository filtering; selecting 4 stars means `Review.rating == 4`, not 4 stars and above.
+- Added stored-review `total` and `filtered_total` counts while keeping topics place-level and independent of filtering/sorting.
+- Updated frontend review query keys to include place ID, exact rating, and sort.
+- Replaced the previous minimum-rating selector with exact star choices and added deterministic sort controls.
+- Added immediate refetch behavior, reset controls, `filtered_total of total reviews` feedback, and empty states for no exact-rating matches.
+- Rating changes clear active semantic selections; sort-only changes preserve semantic membership.
+- Restaurant changes reset rating, sort, and semantic state.
+- Added backend sort allowlist/tie-breaker tests and frontend deterministic-control tests.
+
+#### 16.9.10 Unified backend semantic filtering and reviewer-label dropdown
+
+- Removed the old top-level `POST /api/v1/reviews/filter` endpoint and frontend client path.
+- Added `GET /api/v1/reviews/filter-options` with backend-owned reviewer-label options for Jack, David, and Eric.
+- Added `POST /api/v1/restaurants/{place_id}/reviews/filter` for unified deterministic, reviewer-label, and content filtering.
+- Added validated backend request/response schemas for exact rating, reviewer-label key, content filter, allowlisted sort, full review results, counts, selected IDs, skipped missing-label count, applied controls, topics, and `llm_used`.
+- Added isolated reviewer-label LLM batching that sends only target label, review ID, and stored author display name.
+- Added conservative label-equivalence prompting: Jack does not match Jackie/Jackson/Jacqueline/John; Dave may match David; Erik may match Eric; uncertain entries are excluded.
+- Added isolated content LLM batching that sends only review ID, text, rating, and publication date.
+- Added strict JSON/Pydantic parsing, one controlled JSON retry, per-batch UUID validation, deduplication, and intersection for combined label/content filters.
+- Added place-constrained SQLAlchemy ID loading and empty-selected-ID handling without constructing an empty `IN` clause.
+- Updated the frontend to render backend filter responses directly rather than performing final selected-ID intersection.
+- Added the reviewer-label dropdown beside rating and sort, populated from the backend options endpoint.
+- Preserved immediate topic-chip filtering via the unified endpoint with current rating, reviewer label, and sort controls.
+- Added inline failure messaging that preserves the previous or deterministic review results when semantic filtering fails.
+- Deferred reviewer-label caching until a formal review-corpus version and shared/bounded cache are introduced.
+- Added backend payload-isolation/UUID-validation tests and frontend reviewer-dropdown/failure-preservation tests.
+
+#### 16.9.11 Mobile-first responsive web app and Home Screen experience
+
+- Added Playwright browser testing with Chromium responsive projects for 390×844, 844×390, 768×1024, and 1280×800, plus a smaller WebKit mobile smoke suite.
+- Added a Docker Compose `e2e` profile/service using the Playwright browser image so browser dependencies stay out of the production frontend image.
+- Added dynamic viewport and safe-area CSS primitives, mobile scroll ownership, overscroll containment, horizontal-overflow protection, and mobile touch-target normalization.
+- Added browser-history-aware mobile navigation so result-selected restaurants can return to preserved results, while direct selections return to landing.
+- Added a compact mobile restaurant bar and safe-area-aware mobile filter bottom sheet while retaining the desktop inline filter toolbar.
+- Moved topic chips into a non-sticky shared topic row that scrolls horizontally on phones and wraps on wider layouts.
+- Added installable Home Screen metadata, `manifest.webmanifest`, theme metadata, SVG manifest icon, and Apple touch icon without adding a service worker.
+- Added `make frontend-e2e` for the Playwright suite and kept Vitest/jsdom for component/state coverage.
+
 ### 16.10 Remaining known work
 
 The following items remain open after the follow-up implementation:
 
-- SerpApi review-image, `details`, and `translated_details` persistence, API exposure, and review-card rendering as described in Section 3.5.
-- Production ingress, TLS, and authentication/access control for Oracle or any internet-accessible deployment.
+- Reviewer-label filter caching using a formal `review_corpus_version` plus a bounded shared cache or clearly scoped TTL/LRU.
+- [`BL-009`](backlog.md#bl-009--rich-review-data): SerpApi review-image, `details`, and `translated_details` persistence, API exposure, and review-card rendering.
+- [`BL-010`](backlog.md#bl-010--private-oracle-and-tailscale-deployment): private Oracle/Tailscale ingress, TLS, access control, backups, and operations.
 - A stronger production secret-delivery mechanism beyond environment variables and local `.env` conventions.
-- Global atomic SerpApi budget reservation across simultaneous syncs for different places.
-- Idempotency keys for sync requests.
+- [`BL-007`](backlog.md#bl-007--cost-and-concurrency-protection): global atomic SerpApi budget reservation, idempotency keys, and concurrency limits.
 - Progress streaming, job state endpoints, and cancellation controls.
-- Load-more UI, target selection UI, refresh UI, deletion UI, and cursor-resume UI.
+- [`BL-008`](backlog.md#bl-008--review-pagination-and-load-more): stored-review pagination, load-more UI, target selection, and provider-cursor resume.
 - Full suspected-duplicate marking for ambiguous deduplication cases.
 - Stored-review pagination and response-size controls.
 - Token-aware LLM batching using an actual tokenizer rather than character-count sizing.
@@ -1401,7 +1770,7 @@ Restaurant categories may be derived from SerpApi contributor-review `place_info
 
 - Use only public contributor data returned for the selected review.
 - Do not infer race, ethnicity, nationality, religion, gender, age, disability, politics, home location, or other sensitive/personal traits.
-- Do not use reviewer names, avatars, addresses, or travel patterns for scoring.
+- Do not use reviewer labels, avatars, addresses, or travel patterns for scoring.
 - Do not send contributor profiles or full review histories to the LLM.
 - Prefer retaining derived aggregate statistics and source identifiers over full copied histories.
 - Avoid retaining exact coordinates or addresses when category-level aggregates are sufficient.
@@ -1416,8 +1785,489 @@ Automatically enriching 50 unique reviewers could add up to 50 SerpApi searches 
 - Reviewer-context searches have a separate local usage category, such as `serpapi_contributor_reviews`.
 - They count against the same configured global SerpApi allowance unless the account reports otherwise.
 - The UI displays the remaining locally tracked allowance before a live lookup.
-- The backend enforces the global atomic budget reservation planned in Section 16.10.
+- The backend enforces the global atomic budget reservation planned in Section 18 and tracked as BL-007.
 - Context is fetched only on explicit click; bulk enrichment is out of scope.
+
+## 18. Planned Feature: Cost and Concurrency Protection
+
+Backlog tracking: [`BL-007 — Cost and concurrency protection`](backlog.md#bl-007--cost-and-concurrency-protection). The backlog status is authoritative.
+
+### 18.1 Existing protection and remaining gap
+
+The current application already has:
+
+- A PostgreSQL advisory lock that prevents two active review synchronizations for the same Google Place ID
+- Locally persisted successful, cached, and failed provider-usage counters
+- Cost confirmation before operations estimated to require multiple SerpApi searches
+- Disabled sync/refresh buttons while the current browser mutation is pending
+- Bounded LLM batch concurrency
+
+Those controls do not prevent two different restaurants from simultaneously observing the same remaining SerpApi balance and both spending it. Browser retries also lack a durable operation identity. BL-007 adds an atomic reservation boundary shared by every paid SerpApi operation.
+
+### 18.2 Budget-reservation model
+
+Add a PostgreSQL-backed reservation record such as:
+
+```text
+provider_budget_reservations
+- id
+- provider
+- plan_period
+- operation_type
+- place_id nullable
+- idempotency_key
+- requested_units
+- settled_successful_units
+- settled_cached_units
+- settled_failed_units
+- status: reserved | running | completed | failed | expired
+- lease_expires_at
+- created_at
+- updated_at
+- completed_at nullable
+```
+
+The provider/plan-period/idempotency-key tuple is unique. A companion period-summary row may cache totals, but correctness must come from one transactional PostgreSQL operation rather than an in-memory read-then-write sequence.
+
+Reservation algorithm:
+
+1. Validate the operation and calculate its conservative maximum search count.
+2. Acquire the operation's per-place advisory lock when it mutates restaurant reviews.
+3. Begin a short database transaction.
+4. Lock the provider/period budget row or execute one conditional atomic update.
+5. Calculate `settled successful + active reserved + requested`.
+6. Reject with `PROVIDER_BUDGET_EXHAUSTED` when it would exceed the configured local limit.
+7. Insert the reservation and commit before making an upstream request.
+8. Mark the reservation running and heartbeat only between provider requests.
+9. Settle actual successful/cached/failed counts after every completed provider response.
+10. Release unused reserved units when the operation ends.
+
+No database transaction remains open during HTTP or LLM calls.
+
+### 18.3 Idempotency
+
+Paid mutations accept an `Idempotency-Key` header generated once for a user action:
+
+- Review sync
+- Refresh
+- Fetch older reviews
+- Future reviewer-context enrichment
+
+Repeating the same key with the same operation parameters returns the existing running or completed operation. Reusing it with different parameters returns `IDEMPOTENCY_CONFLICT`. The key is not derived solely from the restaurant because the user must be able to intentionally run a later refresh.
+
+The frontend retains a key across confirmation and network retry, then creates a new key for a new explicit click.
+
+### 18.4 Concurrency limits
+
+Keep separate limits for:
+
+- One active review mutation per restaurant through the existing advisory lock
+- Global SerpApi request concurrency, initially a small configurable process-local semaphore
+- Local LLM concurrency through `LLM_MAX_CONCURRENCY`
+- Optional provider-period and rolling-hour request ceilings
+
+The initial Oracle deployment uses one API replica. Horizontal API scaling is prohibited until the SerpApi concurrency lease is shared across replicas. Atomic budget reservation remains cross-process safe regardless.
+
+### 18.5 Operation response and UI
+
+Provider mutations return or expose:
+
+```json
+{
+  "operation_id": "uuid",
+  "status": "completed",
+  "estimated_request_count": 2,
+  "successful_request_count": 2,
+  "cached_response_count": 0,
+  "failed_request_count": 0,
+  "released_reserved_count": 0,
+  "remaining_local_budget": 211,
+  "stop_reason": "known_unchanged_streak"
+}
+```
+
+The restaurant pane shows pending, success, and failure feedback. The developer drawer may expose reservations and uncertain outcomes, but it must not expose API keys or raw provider payloads.
+
+Stable errors include:
+
+- `COST_CONFIRMATION_REQUIRED`
+- `PROVIDER_BUDGET_EXHAUSTED`
+- `PROVIDER_HOURLY_LIMIT_REACHED`
+- `SYNC_ALREADY_RUNNING`
+- `IDEMPOTENCY_CONFLICT`
+
+### 18.6 Recovery and tests
+
+- A reservation has a lease long enough for the bounded operation timeout.
+- A crashed reservation becomes reclaimable only after lease expiration.
+- Settlement is monotonic and never reduces already observed successful usage.
+- An uncertain provider outcome is counted conservatively until reconciled.
+- Database, API, and race tests run two independent transactions to prove the final budget unit cannot be double-reserved.
+- Tests also cover duplicate keys, parameter conflicts, same-place locking, different-place contention, cancellation, crashes, and unused-unit release.
+
+## 19. Planned Feature: Review Pagination and Load More
+
+Backlog tracking: [`BL-008 — Review pagination and load more`](backlog.md#bl-008--review-pagination-and-load-more). The backlog status is authoritative.
+
+### 19.1 Separate local browsing from provider collection
+
+Two operations must not share the same ambiguous `Load more` label:
+
+```text
+Show more saved reviews
+  PostgreSQL only; no provider cost
+
+Fetch older reviews
+  SerpApi collection; estimated cost and confirmation required
+```
+
+Infinite scrolling may be used only for already stored pages. It must never trigger paid provider collection.
+
+### 19.2 Stored-review API
+
+Extend the deterministic endpoint:
+
+```http
+GET /api/v1/restaurants/{place_id}/reviews
+    ?rating=4
+    &sort=recent
+    &page_size=20
+    &cursor=<opaque cursor>
+```
+
+Response:
+
+```json
+{
+  "reviews": [],
+  "page_size": 20,
+  "next_cursor": "opaque-or-null",
+  "has_more": true,
+  "total": 180,
+  "filtered_total": 42,
+  "rating_filter": 4,
+  "sort": "recent",
+  "topics": [],
+  "topics_fetched_at": null
+}
+```
+
+Use keyset pagination, not offset pagination. Each cursor binds:
+
+- Google Place ID
+- Exact-rating filter
+- Allowlisted sort
+- Last row's ordered values and review ID
+- A formal `review_corpus_version`
+
+The cursor is opaque to the browser and must be validated before use. A mismatch or stale corpus version returns a stable invalid/stale-cursor response so the frontend can restart from page one.
+
+The repository applies place, rating, and sort before the keyset predicate. Existing null-last rules and the review-ID tie breaker remain mandatory. Page size defaults to 20 and is capped at 50.
+
+### 19.3 Corpus version
+
+Add `review_corpus_version` to the place or a dedicated review-collection state row. Increment it when:
+
+- A canonical review is inserted
+- A material review field changes
+- Reviews for the place are deleted
+- A deduplication merge changes visible membership
+
+Topic-only changes do not invalidate review cursors. This version can later support reviewer-label and semantic-result caching.
+
+### 19.4 Upstream fetch-older operation
+
+Add:
+
+```http
+POST /api/v1/restaurants/{place_id}/reviews/load-more
+Idempotency-Key: <client-generated key>
+
+{
+  "additional_target_count": 50,
+  "confirm_cost": true
+}
+```
+
+The backend owns the provider cursor; the browser does not send a raw SerpApi token. The service:
+
+1. Reads the latest resumable collection state.
+2. Estimates the maximum additional provider searches.
+3. Uses BL-007 confirmation, idempotency, budget reservation, and per-place locking.
+4. Requests complete provider pages and commits each page plus the next cursor.
+5. Does not use the known-unchanged refresh shortcut.
+6. Stops at the approved additional target, pagination end, cancellation, or reserved limit.
+7. Returns collected-new count, total stored count, provider request counts, stop reason, and whether another fetch is possible.
+
+If a stored provider cursor has expired, return a recovery choice. A confirmed recovery restarts newest-first, deduplicates observed reviews, and walks forward without discarding stored data.
+
+### 19.5 Frontend state
+
+- Use a TanStack infinite query for deterministic stored pages.
+- Reset pages when restaurant, exact rating, or sort changes.
+- Preserve appended pages and scroll position when moving between the search-results and review surfaces.
+- After sync, refresh, deletion, or fetch-older changes the corpus version, invalidate all pages for that restaurant.
+- Show a free `Show more saved reviews` action only when `has_more` is true.
+- Show `Fetch older reviews` separately when provider collection may continue.
+- Display estimated searches before confirmation and actual new/stored counts after completion.
+
+Semantic filtering remains bounded to its current candidate maximum in BL-008. It must not call the LLM once per display page. Pagination of larger semantic result sets requires a versioned filter-result session or shared cache.
+
+### 19.6 Tests
+
+Backend tests cover every sort, equal sort values, null dates/ratings, exact-star filtering, stale and tampered cursors, deletion, corpus changes, and final empty pages. Integration tests cover provider-cursor resume, expired-cursor recovery, per-page commits, idempotency, and budget exhaustion. Playwright tests cover append behavior, preserved scroll, mobile navigation, action labels, and proof that saved-page loading does not change provider usage.
+
+## 20. Planned Feature: Rich Review Data
+
+Backlog tracking: [`BL-009 — Rich review data`](backlog.md#bl-009--rich-review-data). The backlog status is authoritative.
+
+### 20.1 Provider fields
+
+For each SerpApi review, ingest:
+
+```json
+{
+  "details": {
+    "meal_type": "Delivery",
+    "price_per_person": "$10–20",
+    "food": 5,
+    "service": 5,
+    "recommended_dishes": ["Regular", "Grandma"]
+  },
+  "translated_details": {},
+  "images": ["https://provider-image.example/..."]
+}
+```
+
+The actual `details` keys are dynamic. Preserve the raw map, accept only JSON-compatible scalar/list values within size limits, and normalize recognized aliases for display. Unknown safe keys remain available for generic rendering. Invalid rich fields must not discard the base review.
+
+### 20.2 Persistence model
+
+Add canonical review fields:
+
+```text
+reviews
+- details JSONB nullable
+- translated_details JSONB nullable
+- rich_data_updated_at nullable
+```
+
+Retain provider provenance:
+
+```text
+review_origins
+- provider_details JSONB nullable
+- provider_translated_details JSONB nullable
+```
+
+Add ordered images:
+
+```text
+review_images
+- id
+- review_id
+- review_origin_id
+- provider_name
+- provider_image_url
+- position
+- active
+- first_seen_at
+- last_seen_at
+```
+
+The image uniqueness rule is scoped to origin and provider URL. A new provider snapshot marks missing images inactive instead of deleting history immediately. PostgreSQL stores metadata and URLs only, not image binaries.
+
+Canonical precedence follows the existing provider rules: Google-official canonical values win where the official resource supplies an equivalent field; otherwise SerpApi may populate the richer canonical display snapshot. Missing fallback data never clears valid SerpApi rich data.
+
+### 20.3 Material-change and deduplication behavior
+
+Normalize maps recursively with deterministic key ordering for comparison. Treat as material:
+
+- A structured key/value added, removed, or changed
+- A translated detail added, removed, or changed
+- An image added, removed, replaced, or reordered
+
+These changes reset the known-unchanged refresh streak and update the canonical review without creating a duplicate. Rich data is not part of the fallback identity match unless required to disambiguate otherwise identical candidates.
+
+### 20.4 API schema
+
+Review responses add optional defaults:
+
+```json
+{
+  "details": {},
+  "translated_details": {},
+  "images": [
+    {
+      "url": "https://...",
+      "position": 0,
+      "provider": "serpapi"
+    }
+  ]
+}
+```
+
+Empty maps and lists preserve compatibility for Google fallback and older stored rows. API responses enforce field-count, value-length, image-count, and URL-length limits.
+
+### 20.5 Review-card rendering
+
+Render recognized fields in this order when present:
+
+1. Order/service type
+2. Meal type
+3. Price per person
+4. Food, service, and atmosphere sub-ratings
+5. Recommended dishes
+6. Dietary, parking, accessibility, seating, and other details
+
+Use human-readable labels derived from an allowlisted key map. Remaining safe unknown keys render through a generic label/value row. Prefer translated values for the configured language and retain original values for fallback or disclosure.
+
+Images render in an optional horizontally scrollable gallery:
+
+- Lazy loading and reserved dimensions to avoid layout shift
+- Broken-image fallback
+- No automatic binary download or PostgreSQL storage
+- Direct review/source link and provider attribution
+- Keyboard-accessible expansion if a lightbox is introduced
+
+Do not use the LLM to invent image captions, infer missing structured values, or turn review details into restaurant-level facts.
+
+### 20.6 URL and content safety
+
+- Accept HTTPS URLs only.
+- Validate supported provider image hosts before rendering.
+- Render structured values as text, never raw HTML.
+- Do not proxy or cache images until provider terms, cache lifetime, attribution, and deletion behavior have been reviewed.
+- Expect remote URLs to expire and keep the rest of the review usable.
+
+### 20.7 Migration and tests
+
+The Alembic migration adds nullable/default-compatible fields and backfills no invented data. Provider fixtures cover complete, partial, translated, unknown, malformed, and missing structures. Refresh tests cover added/removed details and images. API and frontend tests cover safe generic rendering, ordering, long values, broken images, empty fallbacks, keyboard use, and mobile overflow.
+
+## 21. Planned Feature: Private Oracle and Tailscale Deployment
+
+Backlog tracking: [`BL-010 — Private Oracle and Tailscale deployment`](backlog.md#bl-010--private-oracle-and-tailscale-deployment). The backlog status is authoritative. This work is deliberately lower priority than BL-007 through BL-009.
+
+### 21.1 Target boundary
+
+The Oracle VM hosts the always-on frontend, FastAPI backend, and PostgreSQL database. The home Linux machine continues hosting the OpenAI-compatible LLM. All user and LLM traffic stays inside the Tailnet.
+
+```text
+Approved family device
+        │ HTTPS over Tailnet
+        ▼
+Oracle VM: private ingress/reverse proxy
+        ├── frontend
+        ├── FastAPI
+        └── PostgreSQL (Docker network only)
+                  │
+                  │ Tailscale ACL/grant
+                  ▼
+Home Linux LLM endpoint
+```
+
+The Raspberry Pi remains a homelab device and is not part of the production request path.
+
+### 21.2 Oracle host preparation
+
+- Create a non-root deployment account and use key-based or Tailnet administration.
+- Install Docker Engine/Compose and Tailscale from supported sources.
+- Join the VM with a dedicated tagged machine identity.
+- Keep OS security updates, time synchronization, disk monitoring, and log rotation enabled.
+- Use Oracle network rules and the host firewall as deny-by-default layers.
+- Do not expose PostgreSQL, FastAPI, Vite, or the LLM publicly.
+- Retain only the minimum administration/bootstrap path required by the chosen Tailscale setup.
+
+Exact Oracle image, firewall, and Tailscale installation commands must be revalidated against current vendor documentation during implementation.
+
+### 21.3 Tailnet ingress and TLS
+
+Publish one Tailnet-only HTTPS origin such as:
+
+```text
+https://real-reviews.<tailnet-name>.ts.net
+```
+
+Use a Tailnet HTTPS/reverse-proxy mechanism to route:
+
+- `/` to the production frontend
+- `/api/` to FastAPI
+- `/health` only as required for private monitoring
+
+Prefer same-origin frontend/API requests in production so public CORS is unnecessary. Bind container-published ingress ports to loopback or a private interface and keep PostgreSQL exclusively on the Compose network.
+
+Tailscale grants/ACLs should express:
+
+- Approved family users/devices may reach the application HTTPS service.
+- The Oracle API machine identity may reach only the home LLM host/port it requires.
+- Family clients cannot reach the LLM port directly.
+- Unrelated Tailnet devices receive no implicit application or LLM access.
+
+### 21.4 Production Compose and release flow
+
+Deploy with the base and production Compose files:
+
+```bash
+docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config
+docker compose -f docker/compose.yaml -f docker/compose.prod.yaml run --rm migrate
+docker compose -f docker/compose.yaml -f docker/compose.prod.yaml up -d
+```
+
+Production requirements:
+
+- Immutable versioned images
+- No source-code bind mounts
+- No host PostgreSQL port
+- Health checks and restart policies
+- One API replica until BL-007 supports shared concurrency
+- Explicit migration before application cutover
+- Previous known-good image tags retained for rollback
+- Deployment version and migration revision recorded
+
+An automated pipeline may later build and publish images, but the first family deployment may use a documented manual release procedure.
+
+### 21.5 Secrets and configuration
+
+- Do not commit or copy the development `.env` as the production secret store.
+- Provide separate Google server/browser keys with production restrictions.
+- Keep the SerpApi key and any LLM credential available only to FastAPI.
+- Set the production frontend origin/API base to the private HTTPS origin.
+- Configure the LLM base URL using its Tailnet hostname and private port.
+- Restrict secret-file permissions and document rotation.
+- Redact credentials and provider URLs containing secrets from logs.
+
+### 21.6 Data durability
+
+The PostgreSQL named volume persists through container replacement but is not a backup. Before family use:
+
+- Create scheduled encrypted PostgreSQL backups outside the active database volume.
+- Define retention and available disk thresholds.
+- Perform and document a restore into a clean database.
+- Record Alembic revision with each backup.
+- Test container/VM reboot, database health recovery, and application restart.
+- Document Oracle volume or VM failure recovery.
+
+### 21.7 LLM availability
+
+The Oracle API calls the home LLM through Tailscale. Review search, saved-review browsing, deterministic filters, synchronization, and topics continue working when the LLM or home internet is unavailable. Semantic operations return a clear retryable error and preserve deterministic results.
+
+No inbound public port is opened on the home network. If direct Oracle-to-home calls prove unreliable, a future outbound home worker/job-queue design may replace them without changing the public/private application API.
+
+### 21.8 Family and future iOS access
+
+Family devices install Tailscale and access the responsive web app in Safari or from its Home Screen icon. The private HTTPS origin is required for the installed web experience. There is one shared React frontend, not a second mobile implementation.
+
+A future native iOS application can reuse the private FastAPI contract over the Tailnet. Native distribution, TestFlight, App Store enrollment, and Swift/Flutter/React Native work remain outside BL-010.
+
+### 21.9 Deployment acceptance
+
+- Approved family Tailnet devices can reach the HTTPS app.
+- Non-Tailnet clients cannot reach it.
+- Oracle can reach the home LLM, while family clients cannot access the LLM directly.
+- PostgreSQL has no public or Tailnet host port.
+- Frontend/API traffic uses one private HTTPS origin.
+- Restart, migration, rollback, backup, restore, secret rotation, and LLM-offline procedures are exercised.
+- Logs provide request/operation IDs without review text, author data, coordinates, or credentials.
 
 ## References
 

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Real Reviews icon">
+  <rect width="512" height="512" rx="112" fill="#B7462D"/>
+  <circle cx="256" cy="256" r="166" fill="#FFFDFC"/>
+  <path d="M158 282c56-13 95-56 113-126 18 70 57 113 113 126-56 13-95 56-113 126-18-70-57-113-113-126Z" fill="#E3A333"/>
+  <path d="M173 179h166c31 0 56 25 56 56v77c0 31-25 56-56 56H173c-31 0-56-25-56-56v-77c0-31 25-56 56-56Z" fill="none" stroke="#24313A" stroke-width="24"/>
+</svg>

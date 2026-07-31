@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,19 +12,68 @@ from app.models.review_origin import ReviewOrigin
 from app.models.review_sync_run import ReviewSyncRun
 from app.models.review_topic import ReviewTopic
 from app.providers.base import NormalizedReview, NormalizedReviewOrigin, NormalizedReviewTopic
+from app.schemas.reviews import ReviewSort
 from app.utils.text import normalize_author_name, stable_text_hash
+
+
+REVIEW_SORTS = {
+    ReviewSort.RECENT: (
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.OLDEST: (
+        Review.publication_timestamp.asc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.RATING_HIGH: (
+        Review.rating.desc().nullslast(),
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+    ReviewSort.RATING_LOW: (
+        Review.rating.asc().nullslast(),
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
+}
 
 
 class ReviewRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_for_place(self, place: Place) -> list[Review]:
+    async def count_for_place(self, place: Place, rating: int | None = None) -> int:
+        statement = select(func.count()).select_from(Review).where(Review.place_id == place.id)
+        if rating is not None:
+            statement = statement.where(Review.rating == rating)
+        result = await self.session.execute(statement)
+        return int(result.scalar_one())
+
+    async def list_for_place(
+        self,
+        place: Place,
+        rating: int | None = None,
+        sort: ReviewSort = ReviewSort.RECENT,
+    ) -> list[Review]:
+        statement = select(Review).options(selectinload(Review.origins)).where(Review.place_id == place.id)
+        if rating is not None:
+            statement = statement.where(Review.rating == rating)
+        result = await self.session.execute(statement.order_by(*REVIEW_SORTS[sort]))
+        return list(result.scalars().unique())
+
+    async def list_for_place_by_ids(
+        self,
+        place: Place,
+        review_ids: set,
+        sort: ReviewSort = ReviewSort.RECENT,
+    ) -> list[Review]:
+        if not review_ids:
+            return []
         result = await self.session.execute(
             select(Review)
             .options(selectinload(Review.origins))
-            .where(Review.place_id == place.id)
-            .order_by(Review.publication_timestamp.desc().nullslast(), Review.first_fetched_at.desc())
+            .where(Review.place_id == place.id, Review.id.in_(review_ids))
+            .order_by(*REVIEW_SORTS[sort])
         )
         return list(result.scalars().unique())
 

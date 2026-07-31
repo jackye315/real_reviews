@@ -5,7 +5,8 @@ from app.models.review import Review
 from app.models.review_origin import ReviewOrigin
 from app.providers.base import NormalizedReview, NormalizedReviewOrigin
 from app.repositories.reviews import ReviewRepository
-from app.services.reviews import estimate_serpapi_requests
+from app.schemas.reviews import ReviewSyncRequest
+from app.services.reviews import ReviewService, estimate_serpapi_requests
 
 
 def normalized_review(text: str = "great pizza", rating: int = 5) -> NormalizedReview:
@@ -74,3 +75,22 @@ def test_material_change_detection_marks_identical_review_unchanged():
 def test_material_change_detection_marks_edited_review_changed():
     repo = ReviewRepository(session=None)  # type: ignore[arg-type]
     assert repo._has_material_changes(stored_review(), normalized_review(text="updated pizza"), "different") is True
+
+
+async def test_refresh_forces_request_without_duplicate_force_argument(monkeypatch):
+    service = ReviewService(session=None)  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def fake_sync(place_id: str, request: ReviewSyncRequest, is_refresh: bool):
+        captured.update(place_id=place_id, request=request, is_refresh=is_refresh)
+        return "refreshed"
+
+    monkeypatch.setattr(service, "_sync", fake_sync)
+
+    result = await service.refresh("place-1", ReviewSyncRequest(force=True))
+
+    assert result == "refreshed"
+    assert captured["place_id"] == "place-1"
+    assert captured["is_refresh"] is True
+    assert isinstance(captured["request"], ReviewSyncRequest)
+    assert captured["request"].force is True

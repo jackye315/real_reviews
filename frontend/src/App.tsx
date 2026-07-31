@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppChrome } from './components/AppChrome'
 import { DeveloperDrawer } from './components/DeveloperDrawer'
 import { SearchLanding } from './components/SearchLanding'
@@ -7,6 +7,7 @@ import { Workspace } from './components/Workspace'
 import {
   filterReviews,
   getProviderUsage,
+  getReviewFilterOptions,
   getReviews,
   persistSearchResult,
   persistSelection,
@@ -14,10 +15,9 @@ import {
   searchRestaurants,
   syncReviews
 } from './lib/api'
-import { filterByMinimumRating } from './lib/reviews'
 import { useUserLocation } from './hooks/useUserLocation'
-import type { PlaceResponse, RestaurantSearchResult, Review, ReviewTopic } from './types/api'
-import type { MobilePane, WorkspaceMode } from './types/ui'
+import type { PlaceResponse, RestaurantSearchResult, Review, ReviewFilterResponse, ReviewSort, ReviewTopic } from './types/api'
+import type { MobilePane, ReviewOperationNotice, WorkspaceMode } from './types/ui'
 
 function App() {
   const queryClient = useQueryClient()
@@ -32,14 +32,50 @@ function App() {
   const [searchResults, setSearchResults] = useState<RestaurantSearchResult[]>([])
   const [nextSearchPageToken, setNextSearchPageToken] = useState<string | null>(null)
   const [filterText, setFilterText] = useState('')
-  const [minRating, setMinRating] = useState('')
-  const [selectedReviewIds, setSelectedReviewIds] = useState<string[] | null>(null)
+  const [exactRating, setExactRating] = useState('')
+  const [reviewSort, setReviewSortState] = useState<ReviewSort>('recent')
+  const [reviewerLabel, setReviewerLabelState] = useState('')
+  const [semanticResponse, setSemanticResponse] = useState<ReviewFilterResponse | null>(null)
+  const [filterError, setFilterError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [reviewOperationNotice, setReviewOperationNotice] = useState<ReviewOperationNotice | null>(null)
+
+  useEffect(() => {
+    window.history.replaceState({ rrView: 'landing' }, '', window.location.href)
+    const onPopState = (event: PopStateEvent) => {
+      const view = event.state?.rrView
+      if (view === 'reviews') {
+        setMode('workspace')
+        setMobilePane('reviews')
+      } else if (view === 'results') {
+        setMode('workspace')
+        setMobilePane('results')
+      } else {
+        setMode('landing')
+        setMobilePane('results')
+      }
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  const pushHistoryView = useCallback((rrView: 'landing' | 'results' | 'reviews') => {
+    if (window.history.state?.rrView !== rrView) {
+      window.history.pushState({ rrView }, '', window.location.href)
+    }
+  }, [])
 
   const reviewsQuery = useQuery({
-    queryKey: ['reviews', selectedPlace?.google_place_id],
-    queryFn: () => getReviews(selectedPlace!.google_place_id),
-    enabled: Boolean(selectedPlace)
+    queryKey: ['reviews', selectedPlace?.google_place_id, exactRating, reviewSort],
+    queryFn: () => getReviews(selectedPlace!.google_place_id, exactRating ? Number(exactRating) : null, reviewSort),
+    enabled: Boolean(selectedPlace),
+    placeholderData: keepPreviousData
+  })
+
+  const filterOptionsQuery = useQuery({
+    queryKey: ['reviewFilterOptions'],
+    queryFn: getReviewFilterOptions,
+    enabled: Boolean(selectedPlace && reviewsQuery.data?.total)
   })
 
   const usageQuery = useQuery({
@@ -53,9 +89,16 @@ function App() {
     setSelectedSearchResult(sourceResult)
     setMode('workspace')
     setMobilePane('reviews')
-    setSelectedReviewIds(null)
+    setFilterText('')
+    setExactRating('')
+    setReviewSortState('recent')
+    setReviewerLabelState('')
+    setSemanticResponse(null)
+    setFilterError(null)
+    setReviewOperationNotice(null)
+    pushHistoryView('reviews')
     queryClient.invalidateQueries({ queryKey: ['reviews', place.google_place_id] })
-  }, [queryClient])
+  }, [pushHistoryView, queryClient])
 
   const autocompleteMetadataMutation = useMutation({
     mutationFn: (place: PlaceResponse) =>
@@ -85,9 +128,16 @@ function App() {
       setNextSearchPageToken(page.next_page_token ?? null)
       setMode('workspace')
       setMobilePane('results')
+      if (!variables.pageToken) pushHistoryView('results')
       if (!variables.pageToken) {
         setSelectedPlace(null)
         setSelectedSearchResult(null)
+        setFilterText('')
+        setExactRating('')
+        setReviewSortState('recent')
+        setReviewerLabelState('')
+        setSemanticResponse(null)
+        setFilterError(null)
       }
       setMessage(
         userLocation
@@ -107,46 +157,70 @@ function App() {
     onError: (error) => setMessage(error instanceof Error ? error.message : 'Selection failed')
   })
 
-  const applyReviewSyncResponse = (response: {
+  const applyReviewSyncResponse = (operation: 'Sync' | 'Refresh', response: {
     reviews: Review[]
     topics?: ReviewTopic[]
     topics_fetched_at?: string | null
     message?: string | null
     status: string
+    collected_unique_count: number
     successful_request_count: number
     stop_reason?: string | null
   }) => {
     const stop = response.stop_reason ? ` Stop reason: ${response.stop_reason}.` : ''
     setMessage(response.message ?? `Review operation ${response.status}; ${response.successful_request_count} upstream request(s).${stop}`)
-    queryClient.setQueryData(['reviews', selectedPlace?.google_place_id], {
-      reviews: response.reviews,
-      total: response.reviews.length,
-      topics: response.topics ?? [],
-      topics_fetched_at: response.topics_fetched_at ?? null
+    setReviewOperationNotice({
+      kind: 'success',
+      text: `${operation} ${response.status}: ${response.collected_unique_count} new review(s), ${response.reviews.length} stored review(s), ${response.topics?.length ?? 0} topic(s), and ${response.successful_request_count} upstream request(s).${stop}`
     })
+    setSemanticResponse(null)
+    setFilterError(null)
+    queryClient.invalidateQueries({ queryKey: ['reviews', selectedPlace?.google_place_id] })
     queryClient.invalidateQueries({ queryKey: ['providerUsage'] })
   }
 
   const syncMutation = useMutation({
     mutationFn: (confirm: boolean) => syncReviews(selectedPlace!.google_place_id, confirm),
-    onSuccess: applyReviewSyncResponse,
-    onError: (error) => handleCostConfirmation(error, 'Sync failed', (confirm) => syncMutation.mutate(confirm))
+    onMutate: () => setReviewOperationNotice({ kind: 'pending', text: 'Fetching and saving reviews…' }),
+    onSuccess: (response) => applyReviewSyncResponse('Sync', response),
+    onError: (error) => {
+      const text = error instanceof Error ? error.message : 'Sync failed'
+      setReviewOperationNotice({ kind: 'error', text: `Sync failed: ${text}` })
+      handleCostConfirmation(error, 'Sync failed', (confirm) => syncMutation.mutate(confirm))
+    }
   })
 
   const refreshMutation = useMutation({
     mutationFn: (confirm: boolean) => refreshReviews(selectedPlace!.google_place_id, confirm),
-    onSuccess: applyReviewSyncResponse,
-    onError: (error) => handleCostConfirmation(error, 'Refresh failed', (confirm) => refreshMutation.mutate(confirm), 'Continue with refresh?')
+    onMutate: () => setReviewOperationNotice({ kind: 'pending', text: 'Refreshing reviews from SerpApi…' }),
+    onSuccess: (response) => applyReviewSyncResponse('Refresh', response),
+    onError: (error) => {
+      const text = error instanceof Error ? error.message : 'Refresh failed'
+      setReviewOperationNotice({ kind: 'error', text: `Refresh failed: ${text}` })
+      handleCostConfirmation(error, 'Refresh failed', (confirm) => refreshMutation.mutate(confirm), 'Continue with refresh?')
+    }
   })
 
   const filterMutation = useMutation({
-    mutationFn: (filterTextOverride?: string) => filterReviews(filterTextOverride ?? filterText, reviewsQuery.data?.reviews ?? []),
-    onSuccess: (ids) => {
-      setSelectedReviewIds(ids)
-      setMessage(`Filter matched ${ids.length} review(s).`)
+    mutationFn: (overrides?: { contentFilter?: string | null; reviewerLabel?: string | null; sort?: ReviewSort }) => {
+      if (!selectedPlace) throw new Error('Select a restaurant first')
+      const content = overrides?.contentFilter !== undefined ? overrides.contentFilter : filterText
+      const name = overrides?.reviewerLabel !== undefined ? overrides.reviewerLabel : reviewerLabel
+      const sort = overrides?.sort ?? reviewSort
+      return filterReviews(selectedPlace.google_place_id, {
+        rating: exactRating ? Number(exactRating) : null,
+        reviewer_label: name || null,
+        content_filter: content?.trim() || null,
+        sort
+      })
+    },
+    onSuccess: (response) => {
+      setSemanticResponse(response)
+      setFilterError(null)
+      setMessage(`Filter matched ${response.filtered_total} review(s).`)
     },
     onError: (error) => {
-      setSelectedReviewIds(null)
+      setFilterError('Couldn’t apply the new filter; showing previous results. Retry when the local model is available.')
       setMessage(error instanceof Error ? error.message : 'Filter failed')
     }
   })
@@ -165,14 +239,30 @@ function App() {
     }
   }
 
-  const visibleReviews = useMemo(() => {
-    const reviews = reviewsQuery.data?.reviews ?? []
-    const ratingFloor = minRating ? Number(minRating) : null
-    const ratingFiltered = filterByMinimumRating(reviews, ratingFloor)
-    if (!selectedReviewIds) return ratingFiltered
-    const allowed = new Set(selectedReviewIds)
-    return ratingFiltered.filter((review) => allowed.has(review.id))
-  }, [minRating, reviewsQuery.data?.reviews, selectedReviewIds])
+  const effectiveReviewResponse = semanticResponse ?? reviewsQuery.data
+  const visibleReviews = effectiveReviewResponse?.reviews ?? []
+
+  const applyFilterIfActive = (overrides?: { contentFilter?: string | null; reviewerLabel?: string | null; sort?: ReviewSort }) => {
+    const content = overrides?.contentFilter !== undefined ? overrides.contentFilter : semanticResponse?.content_filter ?? null
+    const name = overrides?.reviewerLabel !== undefined ? overrides.reviewerLabel : reviewerLabel
+    if ((content?.trim() || name) && selectedPlace) filterMutation.mutate(overrides)
+    else {
+      setSemanticResponse(null)
+      setFilterError(null)
+    }
+  }
+
+  const setReviewSort = (value: ReviewSort) => {
+    setReviewSortState(value)
+    if (semanticResponse || reviewerLabel) applyFilterIfActive({ sort: value })
+  }
+
+  const setReviewerLabel = (value: string) => {
+    setReviewerLabelState(value)
+    setSemanticResponse(null)
+    setFilterError(null)
+    applyFilterIfActive({ reviewerLabel: value })
+  }
 
   const submitSearch = useCallback(
     (event?: React.FormEvent<HTMLFormElement>) => {
@@ -185,16 +275,35 @@ function App() {
   const resetToLanding = () => {
     setMode('landing')
     setMobilePane('results')
+    pushHistoryView('landing')
     setSelectedPlace(null)
     setSelectedSearchResult(null)
+    setFilterText('')
+    setExactRating('')
+    setReviewSortState('recent')
+    setReviewerLabelState('')
+    setSemanticResponse(null)
+    setFilterError(null)
+    setReviewOperationNotice(null)
+    setSearchQuery('')
     setSearchResults([])
     setNextSearchPageToken(null)
-    setSelectedReviewIds(null)
     setMessage(null)
   }
 
+  const mobileBack = () => {
+    if (searchResults.length) {
+      setMode('workspace')
+      setMobilePane('results')
+    } else {
+      setMode('landing')
+      setMobilePane('results')
+    }
+    if (window.history.state?.rrView === 'reviews') window.history.back()
+  }
+
   return (
-    <main className="min-h-screen bg-[#F7F4EE] text-[#24313A]">
+    <main className="app-shell min-h-screen bg-[#F7F4EE] text-[#24313A]">
       <AppChrome
         mode={mode}
         developerButtonRef={developerButtonRef}
@@ -215,6 +324,7 @@ function App() {
         <Workspace
           mobilePane={mobilePane}
           setMobilePane={setMobilePane}
+          onMobileBack={mobileBack}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onSubmit={submitSearch}
@@ -231,16 +341,35 @@ function App() {
           visibleReviews={visibleReviews}
           filterText={filterText}
           setFilterText={setFilterText}
-          minRating={minRating}
-          setMinRating={setMinRating}
-          selectedReviewIds={selectedReviewIds}
-          setSelectedReviewIds={setSelectedReviewIds}
+          exactRating={exactRating}
+          setExactRating={(value) => {
+            setExactRating(value)
+            setSemanticResponse(null)
+            setFilterError(null)
+          }}
+          reviewSort={reviewSort}
+          setReviewSort={setReviewSort}
+          reviewerLabel={reviewerLabel}
+          setReviewerLabel={setReviewerLabel}
+          reviewerLabelOptions={filterOptionsQuery.data?.reviewer_label_options ?? []}
           syncPending={syncMutation.isPending}
           refreshPending={refreshMutation.isPending}
+          reviewOperationNotice={reviewOperationNotice}
           onSync={() => syncMutation.mutate(false)}
           onRefresh={() => refreshMutation.mutate(false)}
           filterPending={filterMutation.isPending}
-          onFilter={(filterTextOverride) => filterMutation.mutate(filterTextOverride)}
+          onFilter={(filterTextOverride) => filterMutation.mutate({ contentFilter: filterTextOverride ?? filterText })}
+          onResetReviewControls={() => {
+            setFilterText('')
+            setExactRating('')
+            setReviewSortState('recent')
+            setReviewerLabelState('')
+            setSemanticResponse(null)
+            setFilterError(null)
+          }}
+          filterError={filterError}
+          effectiveTotal={effectiveReviewResponse?.total ?? 0}
+          effectiveFilteredTotal={effectiveReviewResponse?.filtered_total ?? 0}
         />
       )}
 

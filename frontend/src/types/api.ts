@@ -55,11 +55,35 @@ export type ReviewTopic = {
   rank: number
 }
 
+export type ReviewSort = 'recent' | 'oldest' | 'rating_high' | 'rating_low'
+
+export type ReviewerLabelOption = {
+  value: string
+  label: string
+}
+
+export type ReviewFilterOptionsResponse = {
+  reviewer_label_options: ReviewerLabelOption[]
+}
+
 export type ReviewListResponse = {
   reviews: Review[]
   total: number
+  filtered_total: number
   topics: ReviewTopic[]
   topics_fetched_at?: string | null
+}
+
+export type ReviewFilterResponse = ReviewListResponse & {
+  candidate_count: number
+  selected_review_ids: string[]
+  skipped_missing_label_count: number
+  rating_filter?: number | null
+  reviewer_label_filter?: string | null
+  content_filter?: string | null
+  sort: ReviewSort
+  llm_used: boolean
+  message?: string | null
 }
 
 export type ReviewSyncResponse = {

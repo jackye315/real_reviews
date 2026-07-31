@@ -1,7 +1,7 @@
 COMPOSE_DEV := docker compose -f docker/compose.yaml -f docker/compose.override.yaml
 COMPOSE_PROD := docker compose -f docker/compose.yaml -f docker/compose.prod.yaml
 
-.PHONY: help up up-detached down down-volumes restart ps logs build config prod-config migrate api-lint api-test frontend-lint frontend-test test frontend-build clean-images
+.PHONY: help up up-detached down down-volumes restart ps logs build config prod-config migrate api-lint api-test frontend-lint frontend-test frontend-e2e test frontend-build clean-images
 
 help:
 	@echo "Real Reviews Docker commands"
@@ -18,6 +18,7 @@ help:
 	@echo "  make api-test        Run backend tests"
 	@echo "  make frontend-lint   Run frontend ESLint"
 	@echo "  make frontend-test   Run frontend tests"
+	@echo "  make frontend-e2e    Run Playwright responsive browser tests"
 	@echo "  make frontend-build  Build frontend production target"
 	@echo "  make test            Run backend and frontend tests"
 	@echo "  make config          Validate dev Compose config"
@@ -66,6 +67,9 @@ frontend-lint:
 
 frontend-test:
 	docker run --rm real-reviews-frontend-dev pnpm test
+
+frontend-e2e:
+	$(COMPOSE_DEV) --profile e2e run --rm e2e
 
 frontend-build:
 	docker build --target build -t real-reviews-frontend-build ./frontend

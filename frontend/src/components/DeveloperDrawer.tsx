@@ -44,13 +44,13 @@ export function DeveloperDrawer({ open, usage, loading, onRefresh, onClose }: De
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="developer-drawer-title">
       <button className="absolute inset-0 cursor-default bg-[#24313A]/35 motion-safe:transition-opacity" aria-label="Close developer drawer" onClick={onClose} />
-      <aside ref={drawerRef} className="absolute bottom-0 right-0 top-auto h-[70vh] w-full border-l border-[#DED8CE] bg-[#FFFDFC] p-5 shadow-2xl motion-safe:transition-transform sm:top-0 sm:h-full sm:max-w-md">
+      <aside ref={drawerRef} className="absolute bottom-0 right-0 top-auto max-h-[min(82dvh,720px)] w-full overflow-y-auto rounded-t-3xl border border-[#DED8CE] bg-[#FFFDFC] p-5 shadow-2xl motion-safe:transition-transform safe-pb sm:top-0 sm:h-full sm:max-h-none sm:max-w-md sm:rounded-none sm:border-l">
         <div className="flex items-center justify-between gap-3">
           <h2 id="developer-drawer-title" className="text-lg font-semibold">Provider usage</h2>
-          <button ref={closeButtonRef} onClick={onClose} className="rounded-lg border border-[#CFC6BA] px-3 py-1 text-sm text-[#24313A]">Close</button>
+          <button ref={closeButtonRef} onClick={onClose} className="min-h-11 rounded-lg border border-[#CFC6BA] px-3 py-1 text-sm text-[#24313A]">Close</button>
         </div>
         <div className="mt-4 flex justify-end">
-          <button onClick={onRefresh} className="text-sm text-[#35647C] hover:underline">Refresh usage</button>
+          <button onClick={onRefresh} className="min-h-11 text-sm text-[#35647C] hover:underline">Refresh usage</button>
         </div>
         <ProviderUsagePanel usage={usage} loading={loading} />
       </aside>

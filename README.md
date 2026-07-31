@@ -37,6 +37,7 @@ make down-volumes
 make migrate
 make api-lint
 make frontend-test
+make frontend-e2e
 make down
 ```
 

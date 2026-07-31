@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import Field, field_validator
 
 from app.schemas.common import APIModel
+
+
+class ReviewSort(StrEnum):
+    RECENT = "recent"
+    OLDEST = "oldest"
+    RATING_HIGH = "rating_high"
+    RATING_LOW = "rating_low"
 
 
 class ReviewResponse(APIModel):
@@ -35,6 +43,7 @@ class ReviewTopicResponse(APIModel):
 class ReviewListResponse(APIModel):
     reviews: list[ReviewResponse]
     total: int
+    filtered_total: int
     topics: list[ReviewTopicResponse] = Field(default_factory=list)
     topics_fetched_at: datetime | None = None
 
@@ -60,40 +69,80 @@ class ReviewSyncResponse(APIModel):
     message: str | None = None
 
 
-class ReviewFilterItem(APIModel):
-    id: UUID
-    text: str = Field(max_length=10000)
+REVIEWER_LABEL_OPTIONS = {
+    "chinese": "Chinese",
+    "korean": "Korean",
+    "japanese": "Japanese",
+    "american": "American",
+    "hispanic": "Hispanic",
+    "indian": "Indian",
+}
+
+FORBIDDEN_FILTER_TERMS = [
+    "race",
+    "ethnicity",
+    "ethnic",
+    "nationality",
+    "religion",
+    "politics",
+    "political",
+    "sexual orientation",
+    "gender identity",
+    "pregnant",
+    "disability status",
+]
+
+class ReviewerLabelOption(APIModel):
+    value: str
+    label: str
+
+
+class ReviewFilterOptionsResponse(APIModel):
+    reviewer_label_options: list[ReviewerLabelOption]
+
+
+class RestaurantReviewFilterRequest(APIModel):
     rating: int | None = Field(default=None, ge=1, le=5)
-    publication_date: datetime | None = None
+    reviewer_label: str | None = Field(default=None, max_length=50)
+    content_filter: str | None = Field(default=None, max_length=500)
+    sort: ReviewSort = ReviewSort.RECENT
 
-
-class ReviewFilterRequest(APIModel):
-    filter_text: str = Field(min_length=1, max_length=500)
-    reviews: list[ReviewFilterItem] = Field(min_length=1, max_length=500)
-
-    @field_validator("filter_text")
+    @field_validator("reviewer_label")
     @classmethod
-    def reject_sensitive_trait_requests(cls, value: str) -> str:
-        lowered = value.lower()
-        forbidden = [
-            "race",
-            "ethnicity",
-            "ethnic",
-            "nationality",
-            "religion",
-            "politics",
-            "political",
-            "sexual orientation",
-            "gender identity",
-            "pregnant",
-            "disability status",
-        ]
-        if any(term in lowered for term in forbidden):
+    def validate_reviewer_label(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        normalized = value.strip().lower()
+        if normalized not in REVIEWER_LABEL_OPTIONS:
+            raise ValueError("Unknown reviewer-label filter")
+        return normalized
+
+    @field_validator("content_filter")
+    @classmethod
+    def validate_content_filter(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        lowered = stripped.lower()
+        if any(term in lowered for term in FORBIDDEN_FILTER_TERMS):
             raise ValueError("Sensitive-trait filtering is not allowed")
-        return value.strip()
+        return stripped
 
 
 class ReviewFilterResponse(APIModel):
+    reviews: list[ReviewResponse]
+    total: int
+    candidate_count: int
+    filtered_total: int
     selected_review_ids: list[UUID]
+    skipped_missing_label_count: int = 0
+    rating_filter: int | None = None
+    reviewer_label_filter: str | None = None
+    content_filter: str | None = None
+    sort: ReviewSort = ReviewSort.RECENT
     llm_used: bool
+    topics: list[ReviewTopicResponse] = Field(default_factory=list)
+    topics_fetched_at: datetime | None = None
     message: str | None = None

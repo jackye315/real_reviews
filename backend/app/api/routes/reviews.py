@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.schemas.common import MessageResponse
 from app.schemas.reviews import (
-    ReviewFilterRequest,
+    RestaurantReviewFilterRequest,
+    ReviewFilterOptionsResponse,
     ReviewFilterResponse,
     ReviewListResponse,
+    ReviewSort,
     ReviewSyncRequest,
     ReviewSyncResponse,
 )
@@ -19,8 +23,13 @@ router = APIRouter()
 
 
 @router.get("/restaurants/{place_id}/reviews", response_model=ReviewListResponse)
-async def list_reviews(place_id: str, session: AsyncSession = Depends(get_session)):
-    return await ReviewService(session).list_reviews(place_id)
+async def list_reviews(
+    place_id: str,
+    rating: Annotated[int | None, Query(ge=1, le=5)] = None,
+    sort: ReviewSort = ReviewSort.RECENT,
+    session: AsyncSession = Depends(get_session),
+):
+    return await ReviewService(session).list_reviews(place_id, rating=rating, sort=sort)
 
 
 @router.post("/restaurants/{place_id}/reviews/sync", response_model=ReviewSyncResponse)
@@ -47,6 +56,15 @@ async def delete_reviews(place_id: str, session: AsyncSession = Depends(get_sess
     return MessageResponse(message=f"Deleted {count} reviews.")
 
 
-@router.post("/reviews/filter", response_model=ReviewFilterResponse)
-async def filter_reviews(request: ReviewFilterRequest):
-    return await ReviewFilterService().filter(request)
+@router.get("/reviews/filter-options", response_model=ReviewFilterOptionsResponse)
+async def filter_options():
+    return ReviewFilterService().options()
+
+
+@router.post("/restaurants/{place_id}/reviews/filter", response_model=ReviewFilterResponse)
+async def filter_restaurant_reviews(
+    place_id: str,
+    request: RestaurantReviewFilterRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    return await ReviewFilterService(session).filter_restaurant(place_id, request)

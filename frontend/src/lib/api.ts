@@ -3,8 +3,10 @@ import type {
   ProviderUsage,
   RestaurantSearchPage,
   RestaurantSearchResult,
-  Review,
+  ReviewFilterOptionsResponse,
+  ReviewFilterResponse,
   ReviewListResponse,
+  ReviewSort,
   ReviewSyncResponse
 } from '../types/api'
 
@@ -70,8 +72,14 @@ export async function persistSearchResult(result: RestaurantSearchResult): Promi
   })
 }
 
-export async function getReviews(placeId: string): Promise<ReviewListResponse> {
-  return requestJson<ReviewListResponse>(`/restaurants/${encodeURIComponent(placeId)}/reviews`)
+export async function getReviews(
+  placeId: string,
+  rating?: number | null,
+  sort: ReviewSort = 'recent'
+): Promise<ReviewListResponse> {
+  const params = new URLSearchParams({ sort })
+  if (rating) params.set('rating', String(rating))
+  return requestJson<ReviewListResponse>(`/restaurants/${encodeURIComponent(placeId)}/reviews?${params.toString()}`)
 }
 
 export async function syncReviews(placeId: string, confirmCost = false): Promise<ReviewSyncResponse> {
@@ -88,20 +96,23 @@ export async function refreshReviews(placeId: string, confirmCost = false): Prom
   })
 }
 
-export async function filterReviews(filterText: string, reviews: Review[]): Promise<string[]> {
-  const response = await requestJson<{ selected_review_ids: string[] }>('/reviews/filter', {
+export async function getReviewFilterOptions(): Promise<ReviewFilterOptionsResponse> {
+  return requestJson<ReviewFilterOptionsResponse>('/reviews/filter-options')
+}
+
+export async function filterReviews(
+  placeId: string,
+  controls: {
+    rating?: number | null
+    reviewer_label?: string | null
+    content_filter?: string | null
+    sort: ReviewSort
+  }
+): Promise<ReviewFilterResponse> {
+  return requestJson<ReviewFilterResponse>(`/restaurants/${encodeURIComponent(placeId)}/reviews/filter`, {
     method: 'POST',
-    body: JSON.stringify({
-      filter_text: filterText,
-      reviews: reviews.map((review) => ({
-        id: review.id,
-        text: review.text ?? review.original_text ?? '',
-        rating: review.rating,
-        publication_date: review.publication_timestamp
-      }))
-    })
+    body: JSON.stringify(controls)
   })
-  return response.selected_review_ids
 }
 
 export async function getProviderUsage(): Promise<ProviderUsage[]> {

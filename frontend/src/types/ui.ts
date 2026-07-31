@@ -1,11 +1,15 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import type { Dispatch, FormEvent, RefObject, SetStateAction } from 'react'
-import type { PlaceResponse, ProviderUsage, RestaurantSearchResult, Review, ReviewListResponse, ReviewTopic } from './api'
+import type { PlaceResponse, ProviderUsage, RestaurantSearchResult, Review, ReviewListResponse, ReviewerLabelOption, ReviewSort } from './api'
 import type { Autocomplete } from '../components/Autocomplete'
 
 export type WorkspaceMode = 'landing' | 'workspace'
 export type MobilePane = 'results' | 'reviews'
 export type SearchSelection = Parameters<typeof Autocomplete>[0]['onSelected']
+export type ReviewOperationNotice = {
+  kind: 'pending' | 'success' | 'error'
+  text: string
+}
 
 export type SearchFormProps = {
   searchQuery: string
@@ -34,6 +38,7 @@ export type SearchLandingProps = {
 export type WorkspaceProps = {
   mobilePane: MobilePane
   setMobilePane: Dispatch<SetStateAction<MobilePane>> | ((pane: MobilePane) => void)
+  onMobileBack: () => void
   searchQuery: string
   setSearchQuery: (value: string) => void
   onSubmit: (event?: FormEvent<HTMLFormElement>) => void
@@ -50,31 +55,46 @@ export type WorkspaceProps = {
   visibleReviews: Review[]
   filterText: string
   setFilterText: (value: string) => void
-  minRating: string
-  setMinRating: (value: string) => void
-  selectedReviewIds: string[] | null
-  setSelectedReviewIds: (ids: string[] | null) => void
+  exactRating: string
+  setExactRating: (value: string) => void
+  reviewSort: ReviewSort
+  setReviewSort: (value: ReviewSort) => void
+  reviewerLabel: string
+  setReviewerLabel: (value: string) => void
+  reviewerLabelOptions: ReviewerLabelOption[]
   syncPending: boolean
   refreshPending: boolean
+  reviewOperationNotice: ReviewOperationNotice | null
   onSync: () => void
   onRefresh: () => void
   filterPending: boolean
   onFilter: (filterTextOverride?: string) => void
+  onResetReviewControls: () => void
+  filterError: string | null
+  effectiveTotal: number
+  effectiveFilteredTotal: number
 }
 
 export type ReviewFiltersProps = Pick<
   WorkspaceProps,
   | 'filterText'
   | 'setFilterText'
-  | 'minRating'
-  | 'setMinRating'
-  | 'selectedReviewIds'
-  | 'setSelectedReviewIds'
+  | 'exactRating'
+  | 'setExactRating'
+  | 'reviewSort'
+  | 'setReviewSort'
+  | 'reviewerLabel'
+  | 'setReviewerLabel'
+  | 'reviewerLabelOptions'
   | 'filterPending'
   | 'onFilter'
+  | 'onResetReviewControls'
+  | 'filterError'
+  | 'effectiveTotal'
+  | 'effectiveFilteredTotal'
 > & {
   canFilter: boolean
-  topics: ReviewTopic[]
+  compact?: boolean
 }
 
 export type DeveloperDrawerProps = {

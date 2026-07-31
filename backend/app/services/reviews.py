@@ -13,7 +13,7 @@ from app.providers.serpapi import SerpApiReviewProvider
 from app.repositories.places import PlaceRepository
 from app.repositories.reviews import ReviewRepository
 from app.repositories.usage import UsageRepository
-from app.schemas.reviews import ReviewListResponse, ReviewResponse, ReviewSyncRequest, ReviewSyncResponse, ReviewTopicResponse
+from app.schemas.reviews import ReviewListResponse, ReviewResponse, ReviewSort, ReviewSyncRequest, ReviewSyncResponse, ReviewTopicResponse
 
 
 def estimate_serpapi_requests(target_count: int) -> int:
@@ -59,13 +59,21 @@ class ReviewService:
         self.reviews = ReviewRepository(session)
         self.usage = UsageRepository(session)
 
-    async def list_reviews(self, place_id: str) -> ReviewListResponse:
+    async def list_reviews(
+        self,
+        place_id: str,
+        rating: int | None = None,
+        sort: ReviewSort = ReviewSort.RECENT,
+    ) -> ReviewListResponse:
         place = await self._get_place(place_id)
-        reviews = await self.reviews.list_for_place(place)
+        reviews = await self.reviews.list_for_place(place, rating=rating, sort=sort)
+        total = await self.reviews.count_for_place(place)
+        filtered_total = await self.reviews.count_for_place(place, rating=rating)
         topics = await self.reviews.list_topics_for_place(place)
         return ReviewListResponse(
             reviews=[review_to_response(item) for item in reviews],
-            total=len(reviews),
+            total=total,
+            filtered_total=filtered_total,
             topics=[topic_to_response(item) for item in topics],
             topics_fetched_at=max((item.snapshot_fetched_at for item in topics), default=None),
         )
@@ -251,7 +259,7 @@ class ReviewService:
 
     async def refresh(self, place_id: str, request: ReviewSyncRequest) -> ReviewSyncResponse:
         return await self._sync(
-            place_id, ReviewSyncRequest(**request.model_dump(), force=True), is_refresh=True
+            place_id, request.model_copy(update={"force": True}), is_refresh=True
         )
 
     async def delete_reviews(self, place_id: str) -> int:
