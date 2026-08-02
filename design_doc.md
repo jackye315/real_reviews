@@ -92,14 +92,14 @@ Review filtering is data-dependent rather than always visible:
 The deterministic controls are separate from the LLM filter and never call the LLM:
 
 - Rating: any rating or exactly 5, 4, 3, 2, or 1 star. Selecting 4 stars means `rating = 4`; it never means 4 stars and above.
-- Sort: most recent, oldest, highest rated, or lowest rated.
-- Default state: any rating, sorted most recent.
+- Sort: Google most relevant, most recent, oldest, highest rated, or lowest rated.
+- Default state after BL-011 has produced a relevance snapshot: any rating, sorted by Google most relevant. Historical restaurants without a relevance snapshot fall back to most recent and clearly show that Google relevance has not been collected yet.
 - Result feedback: show `filtered_total of total reviews`.
 - Reset: restore any rating, any reviewer label, and most recent sorting and clear the content-filter query and active semantic result.
 
 Reviews with a missing rating remain visible only under "Any rating." Reviews with a missing publication timestamp or rating sort after reviews with the requested sortable value. Most recent and oldest refer to the review publication timestamp, not fetch time or edit time.
 
-Changing the exact-rating filter changes the LLM candidate set, so it clears any existing LLM-selected IDs rather than presenting stale semantic results. Changing the reviewer-label selection clears the prior label result and runs the label filter for the new allowlisted value; selecting `Any reviewer label` removes the label constraint without an LLM request. Changing only the sort order preserves active semantic results because membership has not changed. Selecting another restaurant restores any rating, any reviewer label, an empty content query, and most-recent sorting.
+Changing the exact-rating filter changes the LLM candidate set, so it clears any existing LLM-selected IDs rather than presenting stale semantic results. Changing the reviewer-label selection clears the prior label result and runs the label filter for the new allowlisted value; selecting `Any reviewer label` removes the label constraint without an LLM request. Changing only the sort order preserves active semantic results because membership has not changed. Selecting another restaurant restores any rating, any reviewer label, an empty content query, and the best available default: Google most relevant when a saved relevance snapshot exists, otherwise most recent.
 
 Each topic chip represents a topic supplied in the SerpApi Google Maps Reviews response, not a verified restaurant attribute. A topic contains a localized keyword, mention count, and provider topic ID. The UI should label the group "Mentioned in reviews" or "Review topics" so users do not confuse topics with restaurant amenities.
 
@@ -108,23 +108,23 @@ Clicking a topic chip in v1 places its keyword into the existing filter request 
 Reviewer-label filtering is an always-visible dropdown beside the exact-rating and sort controls, not a free-text field and not a mutually exclusive filter mode. The initial options are:
 
 - `Any reviewer label`
-- `Jack`
-- `David`
-- `Eric`
+- `Chinese`
+- `Korean`
+- `Japanese`
 
 `Any reviewer label` is the default and skips label-related LLM inference. The three named values are hardcoded in one backend mapping that is the source of truth:
 
 ```python
 REVIEWER_LABEL_OPTIONS = {
-    "jack": "Jack",
-    "david": "David",
-    "eric": "Eric",
+    "chinese": "Chinese",
+    "korean": "Korean",
+    "japanese": "Japanese",
 }
 ```
 
 The frontend loads this allowlist from a filter-options endpoint and renders the labels in the dropdown. It must not maintain a second independently hardcoded list. Adding another option later requires extending the backend mapping only. The backend rejects submitted label keys that are not in the allowlist.
 
-Selecting Jack, David, or Eric asks the local LLM whether each stored reviewer display name represents that explicit target name. This is not SQL name matching and does not use `LIKE`, trigram similarity, edit distance, or another fuzzy-string algorithm. SQL is used only to retrieve the selected restaurant's candidate review IDs and stored author display names.
+Selecting the reviewer label race asks the local LLM whether each stored reviewer display name represents that explicit target race. This is not SQL name matching and does not use `LIKE`, trigram similarity, edit distance, or another fuzzy-string algorithm. SQL is used only to retrieve the selected restaurant's candidate review IDs and stored author display names.
 
 The reviewer-label prompt and payload are isolated from review-content filtering. They contain only:
 
@@ -165,7 +165,9 @@ When SerpApi supplies the data, each review card may also show:
 
 SerpApi returns structured review details as a dynamic `details` object and may return localized values in `translated_details`. The application must preserve the raw label/value map, normalize only recognized fields, and render unknown fields generically instead of discarding them. Review images should be displayed from provider-supplied URLs with loading, broken-image, attribution, and source-link handling. Google Places fallback reviews will omit images and structured details when the official Review resource does not provide them.
 
-Reviewer history is not part of the initial review fetch. The deferred on-demand reviewer-context flow is specified in Section 17.
+Use a compact shared card rhythm for normal restaurant reviews and reviewer-context cards: approximately 14–16px outer padding, 12px between cards, 8px between header metadata items, and a 24px review-body line height. Rich metadata begins 8px after the review body and uses the same compact rhythm. The normal review/topic column may grow to `max-w-6xl` within the review pane so wide desktop layouts do not retain the old `max-w-4xl` side gutters; keep only the responsive 16–24px page padding at narrower pane widths. Interactive controls retain a minimum 44px touch target even when surrounding whitespace is reduced.
+
+Reviewer history is not part of the initial review fetch. The planned on-demand reviewer-context flow is specified in Section 17.
 
 ### 3.6 Search-to-reviews workspace
 
@@ -444,7 +446,7 @@ Only topic objects with non-empty `id` and `keyword` strings are accepted. Norma
 
 Topics are fetched as part of the review request; there is no separate topic request. Later pagination pages are used for review collection only, and the implementation must not depend on those pages repeating the topic array. Google Places fallback reviews do not provide the equivalent aggregate topic list.
 
-The separate SerpApi Google Maps Contributor Reviews API is reserved for the deferred, user-triggered reviewer-context feature in Section 17. It must never be called automatically as part of restaurant review synchronization.
+The separate SerpApi Google Maps Contributor Reviews API is reserved for the planned, user-triggered reviewer-context feature in Section 17. It must never be called automatically as part of restaurant review synchronization.
 
 #### Local LLM
 
@@ -697,20 +699,24 @@ Restaurant search never calls SerpApi and never retrieves reviews or review topi
 3. If none exist, call SerpApi with:
    - `engine=google_maps_reviews`
    - The Google Place ID
-   - `sort_by=newestFirst`
+   - `sort_by=qualityScore`
    - `hl` set to the configured review language
-4. The first request normally returns eight reviews and may include a top-level `topics` array.
-5. Normalize the first-page topic array separately from the reviews. Preserve each topic ID as an opaque provider value; do not attempt to derive it from the keyword.
-6. Follow pagination with up to 20 reviews per subsequent request.
-7. Stop when:
-   - 50 unique Google-sourced reviews have been collected,
+4. Treat the response order as Google's provider-supplied relevance order. Google and SerpApi do not expose a numeric relevance score, so persist a one-based ordinal rank rather than inventing a score.
+5. The first request normally returns eight reviews and may include a top-level `topics` array.
+6. Normalize the first-page topic array separately from the reviews. Preserve each topic ID as an opaque provider value; do not attempt to derive it from the keyword.
+7. Follow the `qualityScore` pagination cursor with up to 20 reviews per subsequent request. Continue the relevance rank across page boundaries: 1 through 8 on the initial page, then 9 onward on later pages.
+8. Stop when:
+   - 50 provider review records have been processed, with unique canonical inserts reported separately,
    - pagination ends,
    - the configured request budget is reached, or
    - the user cancels the operation.
-8. Persist reviews, review origins, and the topic snapshot transactionally for each successfully processed response.
-9. Return reviews and topics in the synchronization response.
+9. Deduplicate by the existing Google/provider review identity. The rank belongs to the canonical review in this restaurant's active SerpApi relevance snapshot; it does not create a second review row.
+10. Persist reviews, review origins, the topic snapshot, and resumable relevance collection state transactionally for each successfully processed response.
+11. Return reviews and topics in saved relevance order.
 
-Retrieving 50 reviews normally requires approximately four successful SerpApi searches.
+Retrieving 50 reviews normally requires approximately four successful SerpApi searches: the initial eight followed by up to 20 per page. These calls replace the current initial `newestFirst` collection; they are not an additional four calls merely to calculate relevance.
+
+SerpApi documents that the total number of reviews can vary by sorting option. `qualityScore` is therefore the primary relevance ingestion path, not proof that the local corpus is complete. A separately confirmed `newestFirst` reconciliation operation discovers recent reviews that relevance pagination may omit, as specified in Section 22 and [`BL-011`](backlog.md#bl-011--google-relevance-first-review-ingestion-and-local-sorting).
 
 ### 5.4 Load more
 
@@ -722,24 +728,27 @@ Before retrieving additional reviews:
 2. Estimate the number of additional SerpApi searches.
 3. Show the estimate and remaining locally tracked allowance.
 4. Require explicit confirmation.
-5. Continue pagination when the cursor remains valid.
-6. If an old cursor is rejected, restart newest-first and deduplicate previously stored reviews.
+5. Continue the stored `qualityScore` cursor and next relevance rank when both remain valid.
+6. Bind provider cursors to provider, place, language, and provider sort; never resume a `qualityScore` cursor as `newestFirst` or vice versa.
+7. If an old relevance cursor is rejected, offer a confirmed restart from relevance rank 1 and deduplicate previously stored reviews. Preserve the last complete relevance snapshot until the replacement has produced a usable result.
 
 ### 5.5 Refresh
 
 Reviews never refresh automatically.
 
-A manual refresh:
+A normal relevance refresh:
 
 1. Shows an estimated request cost.
 2. Requires confirmation.
-3. Starts from newest-first.
+3. Starts from `qualityScore` and builds a replacement Google-relevance snapshot from rank 1.
 4. Reads topics from the new first-page response.
 5. When the response contains a `topics` array, atomically upserts the returned topics, marks them active, and marks previously active topics for the same place/provider/language inactive when they are absent from the new snapshot. An explicit empty array therefore clears the active topic set.
 6. When the upstream response omits the `topics` field entirely, do not erase the last known snapshot. Retain its fetch timestamp so the UI can distinguish saved topic data from freshly observed data.
 7. Updates known reviews when edit timestamps or content changed.
 8. Inserts newly discovered reviews.
 9. Retains provenance for every provider response used.
+
+A separate action labeled `Check for new reviews` uses `newestFirst`. It updates and inserts canonical reviews but does not assign fabricated relevance ranks to reviews that were not observed in a `qualityScore` response. Reviews without a current relevance rank sort after ranked reviews under `relevant`, using publication timestamp descending and review ID as deterministic fallbacks. The existing ten-known-unchanged optimization applies only to this newest-first reconciliation path.
 
 The optimization to stop requesting older pages after 10 consecutive known unchanged reviews is implemented and tracked as [`BL-001`](backlog.md#bl-001--stop-refresh-pagination-after-known-unchanged-reviews).
 
@@ -754,12 +763,13 @@ GET /api/v1/restaurants/{place_id}/reviews?rating=4&sort=rating_high
 This is a PostgreSQL operation expressed through SQLAlchemy. It does not call Google, SerpApi, or the LLM. The API accepts:
 
 - `rating`: optional integer from 1 through 5; equality filter only
-- `sort`: `recent`, `oldest`, `rating_high`, or `rating_low`; defaults to `recent`
+- `sort`: `relevant`, `recent`, `oldest`, `rating_high`, or `rating_low`; defaults to `relevant` when the restaurant has an active relevance snapshot and otherwise falls back to `recent`
 
 The route validates these values before they reach the repository. Do not accept arbitrary client-provided column names, sort directions, or raw SQL. Define an allowlisted enum:
 
 ```python
 class ReviewSort(str, Enum):
+    RELEVANT = "relevant"
     RECENT = "recent"
     OLDEST = "oldest"
     RATING_HIGH = "rating_high"
@@ -770,6 +780,11 @@ Map that enum to SQLAlchemy ordering expressions rather than SQL strings:
 
 ```python
 REVIEW_SORTS = {
+    ReviewSort.RELEVANT: (
+        ReviewRelevanceRank.rank.asc().nullslast(),
+        Review.publication_timestamp.desc().nullslast(),
+        Review.id.asc(),
+    ),
     ReviewSort.RECENT: (
         Review.publication_timestamp.desc().nullslast(),
         Review.id.asc(),
@@ -791,13 +806,13 @@ REVIEW_SORTS = {
 }
 ```
 
-The repository starts with the selected place, applies `Review.rating == rating` only when a rating was supplied, and then applies the selected expression tuple through `order_by`. The final ID expression provides deterministic ordering when all user-visible values tie.
+The repository starts with the selected place, applies `Review.rating == rating` only when a rating was supplied, left-joins the active relevance snapshot only for `relevant`, and then applies the selected expression tuple through `order_by`. Ranked rows sort first in the exact order returned by `qualityScore`; unranked rows follow in most-recent order. The final ID expression provides deterministic ordering when all user-visible values tie.
 
 The service returns both the total stored-review count and the exact-filtered count. Topics remain place-level data and are not filtered or reordered by these parameters.
 
 For the current unpaginated stored-review response, each control change may refetch from FastAPI immediately; no Apply button or debounce is required. The React Query cache key includes place ID, exact rating, and sort. When stored-review pagination is added, the same validated parameters remain authoritative in PostgreSQL and apply before limit/cursor pagination.
 
-Basic SQL filtering runs before optional semantic filtering. Under the unified backend pipeline in Section 5.7, the frontend sends control values rather than copying stored reviews into the request. Sorting is presentation order and does not affect which reviews either LLM prompt considers.
+Basic SQL filtering runs before optional semantic filtering. Under the unified backend pipeline in Section 5.7, the frontend sends control values rather than copying stored reviews into the request. Sorting is presentation order and does not affect which reviews either LLM prompt considers. Selecting a saved relevance sort is PostgreSQL-only and must never make a SerpApi request; provider requests happen only through explicit synchronization, refresh, load-more, or reconciliation actions.
 
 ### 5.7 Unified backend semantic filtering
 
@@ -821,7 +836,7 @@ Example request:
 The fields are independently optional:
 
 - `rating`: exact integer rating from 1 through 5
-- `reviewer_label`: `null`, `jack`, `david`, or `eric`
+- `reviewer_label`: `null`, `chinese`, `korean`, or `japanese`
 - `content_filter`: optional bounded natural-language review-content query
 - `sort`: the allowlisted sort enum from Section 5.6
 
@@ -908,7 +923,7 @@ Reviewer-label result caching is deferred until the application has a formal `re
 ### 6.1 `places`
 
 - Internal UUID
-- Google Place ID, unique
+- Google Place ID, unique in the current model; BL-002 makes it nullable for supported contributor-only observed places while preserving uniqueness when present
 - Display name
 - Formatted address
 - Latitude and longitude
@@ -951,6 +966,19 @@ Reviewer-label result caching is deferred until the application has a formal `re
 - Fetched timestamp
 
 Each canonical review may have multiple origin records.
+
+### 6.3.1 `review_relevance_ranks`
+
+- Place foreign key
+- Canonical review foreign key
+- Provider name (`serpapi` initially)
+- Provider sort (`qualityScore`)
+- Normalized language code
+- One-based ordinal rank
+- Relevance snapshot/generation identifier
+- Fetched timestamp
+
+This table stores provider ordering, not a provider score and not duplicated review content. Enforce uniqueness for review membership and rank within one place/provider/language/snapshot. The restaurant's collection state identifies the active completed snapshot. A replacement refresh must not expose a mixture of old and new ranks; activate the replacement atomically after the accepted target completes or pagination ends. Partial provider work may still persist canonical review updates, but it must not silently replace the last usable relevance ordering.
 
 ### 6.4 `review_topics`
 
@@ -1076,9 +1104,9 @@ The frontend must not infer review availability from the topic array. The entire
 ```json
 {
   "reviewer_label_options": [
-    {"value": "jack", "label": "Jack"},
-    {"value": "david", "label": "David"},
-    {"value": "eric", "label": "Eric"}
+    {"value": "chinese", "label": "Chinese"},
+    {"value": "korean", "label": "Korean"},
+    {"value": "japanese", "label": "Japanese"}
   ]
 }
 ```
@@ -1092,7 +1120,7 @@ The frontend must not infer review availability from the topic array. The entire
 
 All endpoints will use validated Pydantic request and response models. External errors will be mapped to stable application error codes without exposing credentials or upstream payloads.
 
-The deferred reviewer-context API is specified separately in Section 17 and is not part of the v1 endpoint commitment.
+The planned reviewer-context API is specified separately in Section 17 and is not implemented in the current v1 endpoint set.
 
 ## 9. Configuration and Secrets
 
@@ -1102,7 +1130,7 @@ GOOGLE_MAPS_SERVER_API_KEY=
 SERPAPI_API_KEY=
 
 SERPAPI_DEFAULT_REVIEW_LIMIT=50
-SERPAPI_REVIEW_SORT=newestFirst
+SERPAPI_REVIEW_SORT=qualityScore
 SERPAPI_LANGUAGE=en
 SERPAPI_MONTHLY_REQUEST_BUDGET=225
 
@@ -1649,19 +1677,58 @@ After the July 28, 2026 source-level audit, the following corrective changes wer
 - Added installable Home Screen metadata, `manifest.webmanifest`, theme metadata, SVG manifest icon, and Apple touch icon without adding a service worker.
 - Added `make frontend-e2e` for the Playwright suite and kept Vitest/jsdom for component/state coverage.
 
+#### 16.9.12 Cost and concurrency protection
+
+- Added PostgreSQL-backed budget-period and provider-operation reservation records through migration `0005_provider_budget_ops.py`; the shortened revision identifier fits the pre-existing Alembic version-column limit.
+- Added transactional reservation, settlement, release, lease-expiry reclamation, idempotency fingerprinting, same-place collision handling, and separate uncertain-request accounting.
+- Added an allowlisted, 60-second process-local SerpApi Account API snapshot cache. It parses only plan renewal date, remaining searches, hourly usage, and account hourly limit; raw Account API responses are not logged or persisted.
+- Added separate configurable SerpApi concurrency, reservation lease, and optional hourly safety limits.
+- Added `GET /api/v1/provider-operations/{operation_id}`, `GET /api/v1/provider-operations?limit=20`, and cooperative `POST /api/v1/provider-operations/{operation_id}/cancel` endpoints.
+- Paid sync/refresh mutations now reserve first and return `202 Accepted` while work runs; same-key running replays include `Location` and `Retry-After: 2`, and terminal replays return the saved operation summary.
+- Added frontend session-backed idempotency retention, operation polling, cancellation feedback, normal review refetch after completion, and recent operation metadata in the Developer drawer.
+
+#### 16.9.13 Review pagination and load more
+
+- Added corpus-versioned opaque keyset cursors for deterministic saved-review browsing.
+- Added `review_corpus_version`, provider collection cursor state, and provider-operation result metadata in migration `0006_review_pagination`.
+- Extended saved-review listing with `page_size`, `cursor`, `next_cursor`, `has_more`, and corpus version fields while keeping semantic-filter responses outside pagination.
+- Added free `Show more saved reviews` frontend paging and a separate paid `Fetch older reviews` operation with 20/50/100 server-estimated record targets.
+- Added async provider-cursor expiry recovery metadata and restart-from-newest UI without exposing raw provider cursors to the browser.
+- Added cursor, pagination predicate, load-more lifecycle, frontend, and Playwright coverage.
+
+#### 16.9.14 Rich review data
+
+- Added migration `0007_review_rich_data` with canonical/provider-provenance JSONB detail fields and ordered review-image metadata with cascading deletion.
+- Added strict independent parsing of SerpApi rich snapshots, including limits, original-key preservation, omitted/malformed preservation, valid-empty clearing, and exact Google image-host validation.
+- Added rich-data and image lifecycle material-change detection with one corpus-version increment per changed provider page.
+- Extended review responses and cards with safe generic detail rendering, compatible translated display values, a lazy image gallery, broken-image fallback, attribution, and production image CSP.
+- Added backend parser/material-change tests and frontend rich-card rendering coverage.
+- Refined rich card details into a responsive one/two/three-column metadata grid with full-row long values and accessible repeated-star overall ratings.
+
+#### 16.9.15 On-demand reviewer context and rating baseline
+
+- Added migration `0008_reviewer_context` with shared reviewer identities, reversible contributor enrichment, contributor context membership, observed places/data IDs, venue typing, and shared-budget operation/usage metadata.
+- Added local-only reviewer context/comparison/deletion endpoints, deterministic food-and-drink classification and date normalization, plus explicit one-search contributor collection with shared SerpApi reservations and per-reviewer operation locking.
+- Added reviewer profile navigation, local comparison controls, explicit analyze/refresh/delete actions, private-production feature gating, and browser smoke coverage.
+- Reviewer context is a history-backed in-place body of the selected restaurant pane, not a full-page replacement. Reviews use `/restaurants/{place_id}`; reviewer context uses `/restaurants/{place_id}?reviewer={reviewer_id}&review={review_id}`. History/popstate and direct URL restoration retain the workspace and restaurant header, while review filters, paging, and scroll position remain in the mounted workspace state. Reviewer mode hides review-list controls, focuses its heading, and restores focus to its author link and scroll to the saved review position on return.
+- Corrected sparse exact-type presentation: exact and broader-family comparison datasets render separately, an exact zero uses type-specific language without hiding broader evidence, and non-default windows issue matched PostgreSQL-only exact/family requests. The original, exact, and broader sections use aligned cards; every matching comparison row includes its stored review body, with the first five progressively disclosed in the client. Contributor operation detail exposes typed returned/retained/rejection/duplicate/generation/new/update diagnostics while retaining compact recent-operation lists.
+
+#### 16.9.16 Google relevance-first review ingestion
+
+- Added migration `0009_relevance_snapshots` with snapshot-scoped provider relevance ranks and separate `qualityScore`/`newestFirst` collection state.
+- Primary SerpApi collection now uses validated `qualityScore`; its ordinal provider order is retained as relevance rank rather than an invented score.
+- Added PostgreSQL-only Google-most-relevant sorting, relevance availability metadata, historical most-recent fallback, explicit relevance refresh/continuation labels, and a separate newest-first `Check for new reviews` operation that does not change ranks or topics.
+
 ### 16.10 Remaining known work
 
 The following items remain open after the follow-up implementation:
 
 - Reviewer-label filter caching using a formal `review_corpus_version` plus a bounded shared cache or clearly scoped TTL/LRU.
-- [`BL-009`](backlog.md#bl-009--rich-review-data): SerpApi review-image, `details`, and `translated_details` persistence, API exposure, and review-card rendering.
 - [`BL-010`](backlog.md#bl-010--private-oracle-and-tailscale-deployment): private Oracle/Tailscale ingress, TLS, access control, backups, and operations.
+- [`BL-012`](backlog.md#bl-012--google-review-summary-and-local-food-recommendations): on-demand Google review summaries and evidence-linked local food recommendations.
 - A stronger production secret-delivery mechanism beyond environment variables and local `.env` conventions.
-- [`BL-007`](backlog.md#bl-007--cost-and-concurrency-protection): global atomic SerpApi budget reservation, idempotency keys, and concurrency limits.
-- Progress streaming, job state endpoints, and cancellation controls.
-- [`BL-008`](backlog.md#bl-008--review-pagination-and-load-more): stored-review pagination, load-more UI, target selection, and provider-cursor resume.
+- Progress streaming, richer background-job management, pause/resume, and force termination controls.
 - Full suspected-duplicate marking for ambiguous deduplication cases.
-- Stored-review pagination and response-size controls.
 - Token-aware LLM batching using an actual tokenizer rather than character-count sizing.
 - Date filtering controls and deterministic text-search fallback.
 - Broader LLM safety tests for bypasses, false positives, and prompt injection in review text.
@@ -1688,105 +1755,483 @@ The follow-up implementation was verified with:
 - `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d api` followed by `GET /health` returning database `ok` from a fresh PostgreSQL volume.
 - `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d frontend` followed by a successful HTTP response from `http://localhost:5173`.
 
-## 17. Deferred Feature: On-Demand Reviewer Context
+## 17. Planned Feature: On-Demand Reviewer Context
 
-Reviewer context is a future, explicitly user-triggered feature. It may summarize a reviewer's public Google Maps contribution history as additional context, but it will not label a review as true, false, good, bad, credible, or untrustworthy.
+Backlog tracking: [`BL-002 — On-demand reviewer context and rating baseline`](backlog.md#bl-002--on-demand-reviewer-context-and-rating-baseline). BL-002 is the implementation checklist and source of truth; this section defines the matching system and interaction design.
 
-Backlog tracking: [`BL-002 — On-demand reviewer context and rating baseline`](backlog.md#bl-002--on-demand-reviewer-context-and-rating-baseline). The backlog status is authoritative; this section is the supporting design.
+Reviewer context is explicitly user-triggered, public contribution context. It may compare the current rating with the same reviewer's observed ratings for other supported food-and-drink venues, but it must not label a review as true, false, good, bad, credible, untrustworthy, expert, or inexperienced. It never changes the main review list's filtering, ordering, or visibility.
 
-### 17.1 User interaction
+### 17.1 Verified provider capabilities and boundary
 
-When a SerpApi review origin contains a contributor ID, the review card may show an action such as:
+The paid restaurant-review response already provides enough reviewer metadata for a no-cost local profile:
 
 ```text
-Load reviewer context — may use 1 SerpApi search
+reviews[].user.name
+reviews[].user.link
+reviews[].user.contributor_id
+reviews[].user.thumbnail
+reviews[].user.local_guide
+reviews[].user.reviews
+reviews[].user.photos
 ```
 
-The action must:
+Ordinary restaurant ingestion must save these fields. The current implementation already saves contributor ID, display name, profile URL, and avatar through the review/origin model, but BL-002 must also persist Local Guide status and the provider-reported review/photo counts. Older saved reviews may show missing values until their restaurant is refreshed; merely opening a reviewer page must not fill those gaps through a provider request.
 
-1. Appear only when a usable public contributor ID exists.
-2. Never prefetch contributor history on hover, page load, review sync, or background refresh.
-3. Check for an existing permitted context snapshot before making an upstream request.
-4. Clearly disclose whether a live fetch will consume a SerpApi search.
-5. Require explicit confirmation before the first paid/live lookup when no reusable snapshot exists.
-6. Open a drawer or modal without navigating away from the restaurant.
-7. Fall back to the contributor's Google Maps profile link when enrichment is unavailable.
-
-After context is available, the action may read `Reviewer context` without a cost warning until the snapshot expires or is deleted.
-
-### 17.2 Provider flow
-
-The backend will use the contributor ID from the existing SerpApi review origin to call:
+The separate contributor request is:
 
 ```text
 engine=google_maps_contributor_reviews
-contributor_id=<public Google Maps contributor ID>
+contributor_id=<known public contributor ID>
 hl=en
 num=200
 ```
 
-SerpApi currently limits contributor results to a maximum of 200 public reviews. One contributor lookup is a separate SerpApi search from the restaurant-review searches.
+SerpApi currently caps this endpoint at 200 returned public reviews. A successful response contains top-level contributor metadata plus a structured review list. Each review can include a stable `review_id`, rating, relative `date`, text, details, images, source link, and `place_info` with a single human-readable type and Maps `data_id`. The endpoint has no supported server-side restaurant-type filter, so the application fetches once and filters locally before persistence.
 
-Proposed endpoints:
+One successful uncached response consumes one SerpApi search whether it returns 10 or 200 results. Leave SerpApi's default one-hour response cache enabled. Provider references: [Google Maps Reviews API](https://serpapi.com/google-maps-reviews-api) and [Google Maps Contributor Reviews API](https://serpapi.com/google-maps-contributor-reviews-api).
 
-- `GET /api/v1/reviews/{review_id}/reviewer-context` returns an existing context snapshot without triggering an upstream request.
-- `POST /api/v1/reviews/{review_id}/reviewer-context` explicitly requests enrichment and accepts cost confirmation.
-- `DELETE /api/v1/reviews/{review_id}/reviewer-context` deletes locally retained context for that contributor, subject to shared-reference handling.
+### 17.2 Two-stage reviewer experience
 
-The POST operation must be concurrency-safe and idempotent per contributor so simultaneous clicks do not create duplicate upstream searches.
+#### 17.2.1 Local profile stage
 
-### 17.3 Context shown
-
-The initial drawer may show:
-
-- Public display name, avatar, profile link, and Local Guide status
-- Public contribution counts supplied by SerpApi
-- Number of public reviews actually observed in the returned sample
-- Overall observed average rating
-- Observed restaurant-review count
-- Observed counts and average ratings by normalized restaurant category
-- The current review's difference from the reviewer's observed overall and category averages
-- A small, clearly labeled sample of relevant public reviews with direct Google Maps links
-
-Category experience is context, not a verdict. No observed category history must be shown as `No public category history observed`, not as zero expertise or a negative score. A first review in a category must not be demoted merely because prior public reviews are unavailable.
-
-### 17.4 Derived signals
-
-Prefer transparent deterministic calculations over an LLM-generated credibility score:
+A review card with a usable contributor relationship exposes the reviewer name or a restrained `View reviewer` link. It navigates to a real history-backed route:
 
 ```text
-overall_average = mean(observed public ratings)
-category_average = mean(observed ratings for normalized matching categories)
-overall_rating_difference = current_rating - overall_average
-category_rating_difference = current_rating - category_average
-category_sample_size = count(observed matching-category reviews)
+/reviewers/{internal_reviewer_id}?review={current_review_id}
 ```
 
-Any confidence indicator must be based on disclosed sample size and Bayesian/shrinkage logic so one or two category reviews do not appear conclusive. Local Guide status, contribution points, review count, text length, structured details, and photos may be displayed as separate signals but must not independently determine trustworthiness.
+Use the application reviewer UUID as the route/API identifier; the provider contributor ID remains an external identifier. On desktop, transition the right pane from restaurant reviews to reviewer detail while retaining the left search/results pane, query, selected restaurant, and both scroll positions. On phones, use a full-screen detail surface. Browser and in-app Back return to the same restaurant and review position.
 
-Restaurant categories may be derived from SerpApi contributor-review `place_info.type` and normalized through a documented mapping. Ambiguous category matches must remain broad rather than being forced into a narrow cuisine.
+The initial reviewer page is a PostgreSQL-only view:
 
-### 17.5 Data minimization and safety
+```text
+┌──────────────────────────────────────────────────┐
+│ ← Pizza Sam                                      │
+│                                                  │
+│ [Avatar] Public reviewer name                    │
+│          Local Guide · 1,031 Google reviews      │
+│          341 photos · View Google Maps profile   │
+│                                                  │
+│ Pizza Sam                        │
+│ 4 stars · current review text                    │
+│                                                  │
+│ Review history has not been loaded.              │
+│ [Analyze review history]                         │
+│ May use 1 SerpApi search                         │
+└──────────────────────────────────────────────────┘
+```
 
-- Use only public contributor data returned for the selected review.
-- Do not infer race, ethnicity, nationality, religion, gender, age, disability, politics, home location, or other sensitive/personal traits.
-- Do not use reviewer labels, avatars, addresses, or travel patterns for scoring.
-- Do not send contributor profiles or full review histories to the LLM.
-- Prefer retaining derived aggregate statistics and source identifiers over full copied histories.
-- Avoid retaining exact coordinates or addresses when category-level aggregates are sufficient.
-- Give context snapshots a documented retention/refresh policy consistent with Google and SerpApi terms.
-- Provide deletion and handle a contributor shared by reviews from multiple stored restaurants.
-- Keep this feature disabled for any public release until privacy, retention, attribution, and provider terms have been reviewed.
+Opening, reloading, or returning to this route never calls Google, SerpApi, or the LLM. It shows available saved metadata and uses `Not available` for missing values. It must distinguish provider totals from local observation counts, for example:
 
-### 17.6 Cost controls
+```text
+1,031 public Google review contributions
+200 reviews returned in the saved contributor snapshot
+63 supported food-and-drink reviews retained
+4 reviews used in this comparison
+```
 
-Automatically enriching 50 unique reviewers could add up to 50 SerpApi searches to the approximately four searches used for an initial 50-review restaurant fetch. Therefore:
+#### 17.2.2 Explicit history stage
 
-- Reviewer-context searches have a separate local usage category, such as `serpapi_contributor_reviews`.
-- They count against the same configured global SerpApi allowance unless the account reports otherwise.
-- The UI displays the remaining locally tracked allowance before a live lookup.
-- The backend enforces the global atomic budget reservation planned in Section 18 and tracked as BL-007.
-- Context is fetched only on explicit click; bulk enrichment is out of scope.
+Only `Analyze review history` or `Refresh history` can start contributor work. Before live work, the frontend shows a one-search estimate and BL-007 remaining-budget preflight, requires confirmation, and submits an idempotent operation. The profile remains visible with a local loading/progress state.
+
+After completion, update the same surface and put the comparison at the top:
+
+```text
+Their rating here                         4 stars
+
+Other pizza restaurants · Last 2 years
+Observed average                         4.0 stars
+Difference                              0.0 stars
+Comparable restaurants                  4 · Small sample
+Standard deviation                      1.41
+
+[Exact type] [Broader restaurant comparison]
+[Last 2 years ▾]
+```
+
+The result then shows sample disclosure, rating distribution, public reviewer metadata, and progressively disclosed relevant accepted reviews with their stored bodies. Time-window and exact/broader controls recalculate locally and never start provider work. When exact-type evidence has fewer than five rows, render the exact result and a separately labeled broader-family result together or provide an explicit control that makes both states discoverable. An exact empty state must not hide a non-empty broader result.
+
+Required states are `not_loaded`, `loading`, `available`, `available_stale`, and `failed`. A stale saved context stays visible. Use `History fetched <date>` and provide a separate `Refresh history — may use 1 SerpApi search` action. Staleness never automatically refreshes data.
+
+### 17.3 API and operation contract
+
+```http
+GET /api/v1/reviewers/{reviewer_id}?current_review_id={review_id}
+```
+
+This endpoint is side-effect free and PostgreSQL-only. It returns stored reviewer metadata, the current review/restaurant summary, context state and counts, and—when available—the default two-year exact-type comparison. It must have no provider or LLM call path.
+
+Validate that `current_review_id` belongs to the requested reviewer and a supported current place. A mismatched reviewer/review pair is rejected rather than used as arbitrary comparison context.
+
+```http
+GET /api/v1/reviewers/{reviewer_id}/comparison
+    ?current_review_id={review_id}
+    &time_window=two_years
+    &match_level=exact_type
+```
+
+This endpoint is also PostgreSQL-only. Allowlisted time windows are `six_months`, `one_year`, `two_years`, and `all_observed`. Allowlisted match levels are `exact_type` and `comparison_family`.
+
+Each comparison's `relevant_reviews` contains every matching row from the bounded contributor snapshot. A row exposes `id`, `place_name`, `rating`, `text`, `original_text`, `provider_date_text`, `publication_date_is_approximate`, and `source_url`. The API does not truncate this collection for presentation; the frontend owns the initial five-row progressive disclosure.
+
+```http
+POST /api/v1/reviewers/{reviewer_id}/context
+Idempotency-Key: <client-generated key>
+
+{
+  "current_review_id": "uuid",
+  "confirm_cost": true,
+  "force_refresh": false
+}
+```
+
+The backend rechecks saved state before reserving a search. A live lookup uses the completed BL-007 infrastructure with operation type `serpapi_contributor_reviews`, one reserved search, Account API/preflight policy, the global SerpApi semaphore, durable idempotency, and a per-contributor concurrency guard. It returns `202` plus an operation ID and uses the existing operation status/cancellation endpoints. The terminal result includes the context summary and requested default comparison so the UI renders immediately without a second statistics request.
+
+Extend provider operations with nullable `reviewer_id` and a reviewer display summary. Store only typed non-raw counts and the default comparison in operation result metadata. The single-operation status response may expose that typed result; the Developer drawer list stays compact and never returns copied contributor history. Prevent cross-process duplicates by locking the reviewer row during reservation/active-operation creation and applying the existing same-subject collision rule to reviewer ID; the process-local provider semaphore is only a throughput limit.
+
+When `force_refresh=false` and a reusable snapshot exists, replay the saved result without an upstream call or reservation. When the user explicitly selects refresh, use `force_refresh=true`, a new idempotency key, and another confirmed reservation. An advisory stale snapshot remains viewable and reusable; there is no expiration-driven automatic provider call.
+
+```http
+DELETE /api/v1/reviewers/{reviewer_id}/context
+```
+
+Deletion is local-only and follows the shared canonical-review rules in Section 17.8.
+
+Stable feature errors are `REVIEWER_NOT_FOUND`, `REVIEWER_REVIEW_MISMATCH`, `REVIEWER_CONTRIBUTOR_ID_UNAVAILABLE`, `REVIEWER_CONTEXT_ALREADY_RUNNING`, and `REVIEWER_CONTEXT_PROVIDER_FAILED`, plus the existing BL-007 confirmation/budget/hourly/idempotency/cancellation codes. Zero accepted or zero exact-type rows is a successful empty-evidence result rather than an error.
+
+### 17.4 Canonical data model
+
+BL-002 extends the existing shared canonical model; it does not add a graph database or separate full review stores for restaurant and contributor views.
+
+#### 17.4.1 `reviewers`
+
+```text
+id UUID primary key
+google_contributor_id string nullable unique
+display_name nullable
+avatar_url nullable
+profile_url nullable
+local_guide nullable
+level nullable
+points nullable
+provider_review_count nullable
+provider_rating_count nullable
+provider_photo_count nullable
+profile_observed_at nullable
+context_generation integer not null default 0
+context_fetched_at nullable
+context_status: not_loaded | available | failed
+provider_results_returned integer nullable
+accepted_food_and_drink_count integer nullable
+rejected_non_food_count integer nullable
+rejected_unknown_type_count integer nullable
+rejected_missing_required_data_count integer nullable
+created_at
+updated_at
+```
+
+This is a public contributor table, not an application-account table. Upsert primarily by `google_contributor_id`; use the internal UUID for relationships and public API routes. Normal restaurant ingestion updates fields already included in the paid restaurant response. Contributor enrichment may add level, points, rating count, and fresher totals.
+
+Set `REVIEWER_CONTEXT_STALE_AFTER_DAYS=30` by default. This changes only the UI label/action; it does not invalidate or refresh a snapshot.
+
+Persist only `not_loaded`, `available`, or `failed`. Derive `loading` from an active BL-007 provider operation and derive `available_stale` from an available context older than the advisory threshold. A failed refresh preserves persistent `available` when a prior generation exists; `failed` is stored only when no valid generation exists.
+
+Backfill one reviewer per distinct non-null existing `review_origins.contributor_id`, select the latest non-null public profile values, and link the matching canonical reviews. Leave provider review/photo totals null until a restaurant refresh or explicit context fetch supplies them. Never merge authors without the same exact contributor ID.
+
+#### 17.4.2 `place_data_ids` and `places`
+
+```text
+place_data_ids
+- data_id string primary key
+- place_id UUID foreign key -> places.id
+- first_seen_at
+- last_verified_at
+```
+
+Keep `places.google_place_id` as the official Google identifier but allow null for a contributor-only observed venue. Retain both official Place ID and Maps `data_id` once both are known. Add to `places`:
+
+```text
+state: observed | selected
+provider_type nullable
+normalized_venue_type nullable
+comparison_family nullable
+type_source nullable
+type_confidence nullable
+classifier_version nullable
+```
+
+Comparison families are `restaurant`, `cafe`, `bar_or_pub`, `brewery_or_winery`, and `bakery_or_dessert`. Exact types remain specific, such as `pizza_restaurant`, `thai_restaurant`, `cafe`, or `bakery`. Contributor-only observed places need a display title, `data_id`, supported type, and source link; do not retain contributor-only exact addresses or coordinates merely for comparison.
+
+An accepted observed place may be displayed immediately inside reviewer context, but it is not promoted into the application's independent main search results and does not claim a complete restaurant review corpus. When a later normal search/fetch confirms it, promote or merge it to `selected` and reuse the existing canonical review.
+
+#### 17.4.3 `reviews`, origins, and images
+
+Add to canonical reviews:
+
+```text
+google_review_id string nullable unique
+reviewer_id UUID nullable foreign key -> reviewers.id
+observed_data_id string nullable
+seen_via_restaurant_at nullable
+seen_via_contributor_at nullable
+contributor_generation integer nullable
+provider_date_text nullable
+publication_date_lower_bound nullable
+publication_date_upper_bound nullable
+publication_date_precision: exact | day | week | month | year | unknown
+publication_date_is_approximate boolean not null default false
+publication_date_basis: published | edited_or_displayed | unknown
+```
+
+The internal UUID remains the canonical primary key; `google_review_id` is an external unique deduplication key. Every accepted review has a canonical `place_id`, even when that place is contributor-only and its official Google Place ID is unknown. Retain contributor `data_id` in `observed_data_id` even after official identity is known; `place_data_ids` is the authoritative mapping. A shared `reviewer_id` lets one row support restaurant and reviewer views.
+
+Keep existing `review_origins` for provider provenance and `review_images` for ordered image metadata. They are supporting records, not duplicate full reviews. Required indexes include unique contributor ID, unique non-null Google review ID, unique `data_id`, non-null observed data ID, `reviews(reviewer_id, contributor_generation, publication_timestamp)`, the existing place/date index, and a supported place type/family join path.
+
+The migration marks existing places `selected`, backfills unambiguous Google review IDs from existing origins, resolves pre-existing canonical duplicates with the current deduplication rules, and only then adds the unique review-ID constraint.
+
+### 17.5 Food-and-drink allowlist
+
+Request `hl=en`, classify deterministically, and version the mapping as `food_drink_v1`. Normalize whitespace and case, map `Café` to `cafe`, and treat `bar and grill` and `bar & grill` identically. Never use the LLM, review text, reviewer name/avatar, place title, address, or coordinates to infer eligibility.
+
+Canonical type and family mapping is fixed for `food_drink_v1`:
+
+```text
+restaurant or * restaurant -> restaurant or *_restaurant -> restaurant
+diner                       -> diner                       -> restaurant
+bistro                      -> bistro                      -> restaurant
+cafeteria                   -> cafeteria                   -> restaurant
+food court                  -> food_court                  -> restaurant
+bar & grill                 -> bar_and_grill               -> restaurant
+cafe                        -> cafe                        -> cafe
+coffee shop                 -> coffee_shop                 -> cafe
+bar                         -> bar                         -> bar_or_pub
+pub                         -> pub                         -> bar_or_pub
+brewery                     -> brewery                     -> brewery_or_winery
+winery                      -> winery                      -> brewery_or_winery
+bakery                      -> bakery                      -> bakery_or_dessert
+dessert shop                -> dessert_shop                -> bakery_or_dessert
+ice cream shop              -> ice_cream_shop              -> bakery_or_dessert
+```
+
+Persist only contributor results whose normalized `place_info.type` is:
+
+```text
+exactly "restaurant"
+any value ending in " restaurant"
+cafe
+coffee shop
+diner
+bistro
+cafeteria
+food court
+bar & grill
+bar
+pub
+brewery
+winery
+bakery
+dessert shop
+ice cream shop
+```
+
+The restaurant suffix admits specific types such as pizza, Thai, buffet, vegan, and fast-food restaurant. Exclude hotel, resort, lodge, supermarket, grocery/convenience store, generic store/market, catering, event/wedding venue, missing/localized/unknown values, and unlisted synonyms such as `Patisserie` until a future classifier version explicitly adds them.
+
+An exact incoming Google review-ID match to an existing canonical review at an independently confirmed supported place is the only eligibility override for a missing/broader contributor type.
+
+Rejected contributor results produce no place, mapping, review, origin, image, or other identifiable row. Do not retain rejected review IDs, content, ratings, place metadata, addresses, coordinates, data IDs, links, images, or details. Retain only aggregate returned/accepted/rejected/duplicate counters. Never persist the raw contributor response or log rejected payloads.
+
+### 17.6 Ingestion, mapping, deduplication, and snapshots
+
+Do not hold a database transaction while waiting for SerpApi. After a successful response:
+
+1. Validate the contributor relationship and parse top-level metadata plus all returned reviews in memory.
+2. Require a review ID, rating from 1 through 5, `place_info.data_id`, and allowlisted type or independently accepted existing place. Review text is optional.
+3. Classify before persistence and calculate only aggregate rejection counts for discarded rows.
+4. Batch-query all incoming Google review IDs through an index. Do not scan all unmatched rows and do not fuzzy-match place names/addresses.
+5. Deduplicate first by exact Google/provider review ID. Enrich the canonical review and its origins rather than inserting a second review.
+6. Resolve accepted places through `place_data_ids`; create a minimal supported `observed` place only when no mapping exists. Do not perform one Place Results lookup per historical place.
+7. When the contributor copy of the currently open review has the same review ID as its existing restaurant copy, map its `data_id` directly to the selected canonical place.
+8. If a later restaurant fetch proves by exact review-ID overlap that an observed and selected place are identical, merge them transactionally and rewrite dependent review/mapping rows. Similar title/address alone never proves identity.
+9. Increment `reviewers.context_generation` once per completely successful refresh, stamp every accepted member with that generation, and batch-upsert places, mappings, reviews, origins, and images in one short transaction.
+10. Commit generation, counts, and `context_fetched_at` only after the entire accepted snapshot is durable. Calculate the comparison in memory or from the committed generation and attach it to the terminal operation result.
+
+Latest context membership is `reviewer_id` plus the reviewer's current `context_generation`. Older canonical rows may remain for restaurant display and future deduplication but do not enter the latest baseline unless re-observed. Provider, parsing, cancellation, or database failure leaves the prior generation intact and visible.
+
+When restaurant and contributor views observe the same SerpApi review, update the existing unique provider/review origin rather than inserting another. Preserve a known official origin `provider_place_id`; the contributor `data_id` belongs in `observed_data_id` plus `place_data_ids` and must not overwrite that official identity.
+
+This design was validated using one live contributor response associated with an already stored pizza-restaurant review: 200 reviews were returned, 63 matched the food-and-drink allowlist, five had the exact provider type `Pizza restaurant` including the current place, and the current review ID matched exactly across the two provider views. The values validate the shape and flow only; they are not fixtures or hardcoded thresholds.
+
+### 17.7 Type matching and deterministic comparison
+
+Classify a canonical place once. For the selected current restaurant, choose its exact supported type in this order:
+
+1. Stored specific SerpApi Maps/restaurant primary type
+2. Official Google Places primary type
+3. First supported specific `*_restaurant` entry in provider-supplied Google `place_types` order, skipping generic restaurant/food/establishment, delivery, takeaway, and store types
+4. First explicitly allowlisted non-restaurant food-and-drink type in provider order
+5. Generic `restaurant` only when no more specific supported value exists
+6. No exact comparison when none is available; never guess from name or review content
+
+Contributor `place_info.type` normalizes as follows:
+
+```text
+Pizza restaurant -> pizza_restaurant -> restaurant family
+Cafe             -> cafe             -> cafe family
+Bar              -> bar              -> bar_or_pub family
+Bakery           -> bakery           -> bakery_or_dessert family
+```
+
+Generic `Restaurant` remains `restaurant` and does not enter a pizza or cuisine-specific comparison. A broader family result may include it only under a separately labeled broader comparison.
+
+The default comparison uses:
+
+```text
+same reviewer
+AND latest successful context_generation
+AND exact normalized type of the current restaurant
+AND canonical place_id != current restaurant place_id
+AND rating between 1 and 5
+AND selected date window, default last two years
+```
+
+Excluding the current canonical place prevents another review of the same place from becoming its own baseline. Compute through deterministic SQL/PostgreSQL semantics:
+
+```text
+sample_size
+average_rating
+median_rating
+sample_variance via var_samp, null for fewer than 2
+standard_deviation via stddev_samp, null for fewer than 2
+difference_from_average = current_rating - average_rating
+distribution counts for exact ratings 1 through 5
+```
+
+The response discloses current rating, match level, exact type/family, sample size, selected window, snapshot generation/fetch time, provider result count, retained count, and approximate-date use.
+
+Presentation rules:
+
+- `0`: no public matching-category history observed; no numeric baseline.
+- `1–2`: show individual ratings and count, but no variance or conclusion.
+- `3–4`: show average, median, and distribution with `Small sample`.
+- `5+`: show full deterministic statistics.
+- `10+`: may describe a larger observed sample but remains observational.
+
+Default to exact type. When its sample is below five, the API additionally returns or the frontend locally requests a broader `comparison_family` result for the same reviewer, current review, context generation, and time window. The UI must label it separately and never silently combine it with the exact sample. A zero exact sample means only that no *other* canonical place of the exact normalized type matched; it does not mean that the provider returned no history or that the retained snapshot is empty.
+
+Use neutral language, for example: `The reviewer rated this pizza restaurant 1.2 stars above their observed average for four other pizza restaurants.` Never describe a review as better, worse, more credible, more accurate, or more meaningful.
+
+### 17.8 Dates, retention, deletion, and privacy
+
+Allow `six_months`, `one_year`, `two_years`, and `all_observed`; default to two years. Changing the window is a PostgreSQL-only comparison request.
+
+Use exact ISO publication time when a restaurant origin supplies it. The tested contributor response supplied only relative strings such as `3 months ago`, `a year ago`, and `Edited a year ago`. Preserve the raw text and derive lower/upper approximate bounds relative to `context_fetched_at`.
+
+Use conservative relative-date boundaries:
+
+```text
+six_months  -> days/weeks and 1–5 months; exclude "6 months ago"
+one_year    -> days/weeks and 1–11 months; exclude "a year ago"
+two_years   -> days/weeks/months and "a year ago"; exclude "2 years ago"+
+all_observed -> every accepted row, including unknown dates
+```
+
+Singular forms map to one. Strip `Edited ` before interpreting the bucket, then set the basis to edited/displayed activity rather than guaranteed original publication time. Unknown dates enter only `all_observed`, and every approximate comparison discloses that fact.
+
+Persist the accepted shared snapshot until explicit deletion or refresh. A stale advisory does not hide it or trigger work. Deletion requires UI confirmation and removes contributor-only reviews, origins, images, and observed places/data-ID mappings with no other canonical use. Restaurant-confirmed reviews remain; clear their contributor-snapshot generation/membership rather than deleting them. Clear the reviewer's context counters/status consistently and report removed-versus-preserved counts.
+
+Only supported public food-and-drink history is retained. Never retain non-food contributor rows or raw contributor responses. Do not send profile/history data to the LLM; infer sensitive traits, identity, home location, or travel patterns; or score avatar, Local Guide status, points, counts, addresses, coordinates, review length, or travel history. Use direct Google/SerpApi attribution and source links. Provider-hosted avatars/images follow BL-009 host allowlist, referrer, accessible-label, and no-binary-storage rules.
+
+Keep the feature private until provider terms, privacy, retention, attribution, and deletion behavior are reviewed for public release.
+
+### 17.9 Performance, failures, and verification
+
+The provider call dominates the initial analysis wait. In the live validation, SerpApi reported 2.8 seconds of processing and local classification/statistics over 200 records took approximately 0.01 seconds. Keep the local profile responsive, classify in memory, batch-read IDs, batch-upsert accepted rows, and never issue a provider/database call per returned review. Persist one shared snapshot per reviewer; all later restaurant/type/time comparisons reuse it.
+
+The contributor endpoint is one bounded provider request, not a pagination loop. Check cooperative cancellation before the request and before persistence. An in-flight request may still consume a provider search; settle it conservatively and do not advance the generation if cancellation wins before commit.
+
+Store normalized PostgreSQL rows and provider URLs only—never raw contributor response bodies or downloaded image binaries. Budget approximately 1–5 MB for a complete 200-result normalized response before allowlist reduction; accepted-only storage is normally smaller. Even a deliberately conservative 10 MB per loaded reviewer context is about 1 GB for 100 reviewers and fits the planned Oracle storage boundary.
+
+Failure rules:
+
+- Missing contributor ID: show available author/source data without analysis action.
+- Missing old profile totals: show unavailable; do not auto-fetch.
+- Budget failure or declined confirmation: leave the local profile unchanged.
+- Provider error/cancellation/failed persistence: keep the prior valid generation and show the failed operation separately.
+- Malformed individual candidate: skip it, update a non-identifying rejection counter, and accept the rest.
+- Invalid top-level response: fail atomically and keep prior context.
+- Zero supported or exact-type results: show unavailable evidence, never a negative reviewer score.
+
+Required backend, integration, frontend, and Playwright coverage is enumerated in BL-002 and is part of readiness. At minimum, prove local GETs cannot call providers; only allowlisted rows persist; exact IDs deduplicate and map places; generation replacement is atomic; type/time/sample calculations match the contract; BL-007 prevents duplicate/budget-exceeding work; and desktop/mobile navigation preserves the restaurant context.
+
+### 17.10 Corrective contract for empty exact-type comparisons
+
+The first end-to-end validation of a sparse exact category showed that successful ingestion and correct SQL can still produce a misleading UI. In the observed shape, contributor history contained many supported restaurant reviews, but the current restaurant's exact type occurred only for the current canonical place. Because the current place is intentionally excluded, the exact sample was zero while the broader `restaurant` family sample was non-empty. The backend returned both results, but the frontend displayed only the exact empty state.
+
+This is a presentation and operation-observability defect, not a provider failure. The correction is part of BL-002 and requires all of the following.
+
+#### 17.10.1 Comparison response and rendering
+
+- `GET /reviewers/{id}` continues returning the default two-year `comparison` plus `broader_comparison` whenever exact `sample_size < 5`.
+- For a selected non-default time window, the frontend calls the local comparison endpoint for `exact_type` and, when exact is below five or broader is explicitly selected, for `comparison_family`. Both requests use the same reviewer, current review, selected time window, and current context generation.
+- Frontend query identity includes reviewer ID, current review ID, time window, and match level. Late responses for a previous route, generation, or window are discarded and must not be combined with current data.
+- Exact and broader results are independent datasets. Render the exact result first, then the clearly labeled broader result, or expose an equally clear exact/broader control. Never replace, merge, or average the two samples together.
+- An exact zero uses type-specific language such as `No other Tibetan restaurant reviews observed`. If the broader result is non-empty, display it immediately below as `Broader restaurant comparison` with its own sample size and statistics.
+- The current canonical place is excluded from both queries by `place_id`, including when the contributor copy of the current review was deduplicated successfully.
+- Apply sample-size presentation independently to both results: zero has no numerical baseline; one or two disclose individual ratings; three or four show average, median, distribution, and `Small sample`; five or more show the full statistics.
+- Return every relevant accepted review matching the selected reviewer, committed generation, current-place exclusion, match level, and time window. The contributor response is already bounded at 200 records; do not apply a second silent ten-row cap. Sort by newest observable date and then stable review ID; do not rank by supposed reviewer quality.
+- Each relevant-review DTO includes internal review ID, place display title, rating, `text`, `original_text`, provider date text, approximation disclosure, and an available source link. The text fields come from the canonical review already stored in PostgreSQL; this response path performs no provider or LLM work.
+- Render the reviewer identity/profile as an unboxed header, then three same-width, same-padding semantic cards: `Original restaurant review`, the exact-type comparison, and the broader-family comparison when present. All three cards share the same left edge; neither comparison may appear indented relative to the original review.
+- When comparison data exists, render a full-width `Rating overview` on a second row below the reviewer avatar/profile. Keep both exact-type and broader-family summaries visible: place them side by side when space permits and stack them at narrower breakpoints. A zero exact sample remains explicit rather than disappearing.
+- Put the shared `Window` selector in the overview header. Apply the sample-size presentation rules independently in both summaries, including sample count, average, median, standard deviation, and the five-bucket distribution when available.
+- Use a moderately wider reviewer content limit and compact vertical rhythm so the overview does not consume most of the initial viewport. When exact evidence is empty but broader evidence exists, allocate roughly one-third of the summary row to the exact empty status and two-thirds to the broader summary; use equal columns when both contain evidence.
+- At wide breakpoints, lay out each non-empty summary's statistics and five-bucket distribution side by side. Stack them only when the available width would make the buckets or labels cramped.
+- Use one card per semantic section rather than nesting a separate card around each historical review. The lower exact and broader cards retain their scope/count and divider-separated review rows but do not repeat statistics already shown in the overview.
+- Initially show five review rows in each comparison card. When more matching rows exist, disclose `Showing X of Y` and provide `Show all N reviews`/`Show fewer reviews`. This is client-local progressive disclosure and must not trigger an API request, provider operation, budget reservation, or LLM call.
+- A review row shows its place, repeated-star rating, displayed/approximate date, direct source link, and a readable stored-text preview. Long text has a per-row `Show full review`/`Show less` action; if both text fields are empty, render `No written review`.
+- The three main review/comparison cards remain a single vertical column across viewports, preserve mobile reviewer-pane navigation, and must not introduce horizontal overflow. The profile/overview region may use columns only at readable widths. An empty exact card remains compact while a non-empty broader card displays its review rows normally.
+- Human-readable type labels are presentation-only. Stored and queried normalized identifiers remain unchanged.
+
+#### 17.10.2 Local-only interaction
+
+Initial rendering reuses the comparisons already returned by the local profile response. Time-window or exact/broader changes issue only PostgreSQL-backed GET requests and never create a provider operation, budget reservation, SerpApi request, Google request, or LLM call. Exact and broader results shown together must always share the displayed time window and snapshot generation. Preserve the last internally consistent pair while local requests load, or show a scoped loading state rather than mixing windows.
+
+#### 17.10.3 Operation and classifier diagnostics
+
+The single-operation terminal response for `serpapi_contributor_reviews` exposes typed, non-raw context metadata:
+
+```text
+provider_results_returned
+accepted_food_and_drink_count
+rejected_non_food_count
+rejected_unknown_type_count
+rejected_missing_required_data_count
+duplicate_result_count
+context_generation
+new_canonical_review_count
+updated_existing_review_count
+unchanged_review_count
+```
+
+`collected_unique_count` keeps the cross-provider meaning of newly created canonical reviews. Contributor persistence must return its insert/update/unchanged counts and settle the operation with the new canonical count. It must not substitute total provider records or total accepted snapshot size for this field. Consequently, a refresh can correctly show `0 new` alongside `29 retained`, while a first fetch that creates rows cannot remain at zero merely because settlement omitted the count.
+
+The compact Developer drawer may omit the full comparison object, but it must distinguish provider-returned, retained, and newly created counts. The single-operation endpoint returns the typed reviewer-context result promised in Section 17.3 so polling/reload can recover the completed outcome without interpreting a generic zero counter.
+
+Classification accounting must not hardcode non-food rejections to zero. A versioned classifier decision distinguishes:
+
+```text
+accepted_food_and_drink
+rejected_explicit_non_food
+rejected_unknown_or_ambiguous_type
+rejected_missing_required_data
+```
+
+Only counters are persisted for rejected rows. This diagnostic distinction does not broaden the allowlist and does not permit storing raw or identifiable rejected payloads.
+
+#### 17.10.4 Required regression coverage
+
+Use a synthetic fixture containing a current Tibetan restaurant, its exact contributor copy, no other Tibetan restaurants, and several other accepted restaurant-family reviews. Backend and browser tests must prove exact sample zero, current-place exclusion, non-empty broader fallback, correct sample statistics, synchronized window changes, and zero paid usage for comparison controls. Also assert that returned/retained/new/updated/duplicate/rejection counters reconcile and that the UI never describes the completed retained snapshot as empty merely because exact-type evidence is absent.
+
+All corrective frontend and Playwright assertions are ordinary required regression tests. No expected-failure marker remains. Coverage includes stored review-body serialization, returning all matching rows from the bounded snapshot, aligned semantic cards, initial five-row disclosure, local show-all/show-fewer behavior, and long-text expansion.
 
 ## 18. Planned Feature: Cost and Concurrency Protection
 
@@ -1851,7 +2296,7 @@ Paid mutations accept an `Idempotency-Key` header generated once for a user acti
 - Review sync
 - Refresh
 - Fetch older reviews
-- Future reviewer-context enrichment
+- Reviewer-context enrichment
 
 Repeating the same key with the same operation parameters returns the existing running or completed operation. Reusing it with different parameters returns `IDEMPOTENCY_CONFLICT`. The key is not derived solely from the restaurant because the user must be able to intentionally run a later refresh.
 
@@ -1947,6 +2392,8 @@ Response:
   "filtered_total": 42,
   "rating_filter": 4,
   "sort": "recent",
+  "relevance_available": true,
+  "relevance_fetched_at": "2026-08-02T00:00:00Z",
   "topics": [],
   "topics_fetched_at": null
 }
@@ -1972,6 +2419,7 @@ Add `review_corpus_version` to the place or a dedicated review-collection state 
 - A material review field changes
 - Reviews for the place are deleted
 - A deduplication merge changes visible membership
+- The active Google-relevance snapshot changes visible `relevant` ordering
 
 Topic-only changes do not invalidate review cursors. This version can later support reviewer-label and semantic-result caching.
 
@@ -1991,7 +2439,7 @@ Idempotency-Key: <client-generated key>
 
 The backend owns the provider cursor; the browser does not send a raw SerpApi token. The service:
 
-1. Reads the latest resumable collection state.
+1. Reads the latest resumable `qualityScore` collection state and its next one-based relevance rank.
 2. Estimates the maximum additional provider searches.
 3. Uses BL-007 confirmation, idempotency, budget reservation, and per-place locking.
 4. Requests complete provider pages and commits each page plus the next cursor.
@@ -1999,7 +2447,7 @@ The backend owns the provider cursor; the browser does not send a raw SerpApi to
 6. Stops at the approved additional target, pagination end, cancellation, or reserved limit.
 7. Returns collected-new count, total stored count, provider request counts, stop reason, and whether another fetch is possible.
 
-If a stored provider cursor has expired, return a recovery choice. A confirmed recovery restarts newest-first, deduplicates observed reviews, and walks forward without discarding stored data.
+If a stored provider cursor has expired, return a recovery choice. A confirmed relevance recovery restarts `qualityScore` from rank 1, deduplicates observed reviews, and builds a replacement relevance snapshot without discarding stored canonical data. `newestFirst` reconciliation has its own sort-bound cursor and never continues a relevance cursor.
 
 ### 19.5 Frontend state
 
@@ -2019,7 +2467,7 @@ Backend tests cover every sort, equal sort values, null dates/ratings, exact-sta
 
 ## 20. Planned Feature: Rich Review Data
 
-Backlog tracking: [`BL-009 — Rich review data`](backlog.md#bl-009--rich-review-data). The backlog status is authoritative.
+Backlog tracking: [`BL-009 — Rich review data`](backlog.md#bl-009--rich-review-data). The backlog status is authoritative, and this section is the detailed implementation contract. Keep the two synchronized when BL-009 changes.
 
 ### 20.1 Provider fields
 
@@ -2035,13 +2483,47 @@ For each SerpApi review, ingest:
     "recommended_dishes": ["Regular", "Grandma"]
   },
   "translated_details": {},
-  "images": ["https://provider-image.example/..."]
+  "images": ["https://lh3.googleusercontent.com/..."]
 }
 ```
 
-The actual `details` keys are dynamic. Preserve the raw map, accept only JSON-compatible scalar/list values within size limits, and normalize recognized aliases for display. Unknown safe keys remain available for generic rendering. Invalid rich fields must not discard the base review.
+The actual `details` keys are dynamic. Preserve the original `details` and `translated_details` maps, normalize recognized aliases for display, and retain unknown valid keys for generic rendering. Do not split comma-separated provider strings into lists or infer missing values. Google Places fallback reviews may legitimately contain no equivalent rich data.
 
-### 20.2 Persistence model
+Each details map must be a top-level object whose values are strings, finite numbers, booleans, or flat lists of those scalar types. Omit `null` values. Nested maps and nested lists are not supported; there is no recursive normalization.
+
+Normalize keys for comparison and translated-field matching by applying Unicode NFKC normalization, trimming, lowercasing, converting spaces and hyphens to underscores, and collapsing repeated underscores. Preserve the original maps returned by the provider.
+
+### 20.2 Validation limits
+
+Apply these backend limits independently to each rich-data section:
+
+| Item | Limit |
+|---|---:|
+| Fields per `details` or `translated_details` map | 32 |
+| Normalized detail key | 80 characters |
+| Scalar string value | 1,000 characters |
+| Scalar items per list | 20 |
+| String list item | 250 characters |
+| Normalized UTF-8 JSON per details map | 16 KiB |
+| Images per review | 20 |
+| Image URL | 4,096 characters |
+
+Duplicate normalized keys, non-finite numbers, unsupported structures, invalid URLs, and exceeded limits make the affected section malformed rather than being silently truncated. Validate `details`, `translated_details`, and `images` separately so one malformed section does not discard the base review or prevent another valid section from being accepted.
+
+### 20.3 Snapshot semantics
+
+Provider fields are snapshots, but omission is not equivalent to a valid empty snapshot. Resolve each of `details`, `translated_details`, and `images` into one of four states:
+
+| Provider state | Persistence behavior |
+|---|---|
+| Field omitted | Preserve the previous valid snapshot because this response did not supply the section. |
+| Present and valid nonempty | Replace the previous snapshot with the validated new snapshot. |
+| Present and valid empty `{}` or `[]` | Clear structured data or deactivate previous images. |
+| Present but malformed | Preserve the previous valid snapshot while accepting the base review. |
+
+For a new review with a malformed section and no previous valid snapshot, store no data for that section. Record only a safe validation reason and provider/review identifier; do not log full image URLs.
+
+### 20.4 Persistence and material-change behavior
 
 Add canonical review fields:
 
@@ -2079,17 +2561,18 @@ The image uniqueness rule is scoped to origin and provider URL. A new provider s
 
 Canonical precedence follows the existing provider rules: Google-official canonical values win where the official resource supplies an equivalent field; otherwise SerpApi may populate the richer canonical display snapshot. Missing fallback data never clears valid SerpApi rich data.
 
-### 20.3 Material-change and deduplication behavior
-
-Normalize maps recursively with deterministic key ordering for comparison. Treat as material:
+Compare accepted flat maps with deterministic key ordering. Treat as material:
 
 - A structured key/value added, removed, or changed
 - A translated detail added, removed, or changed
 - An image added, removed, replaced, or reordered
+- A rich provider review origin removed
 
 These changes reset the known-unchanged refresh streak and update the canonical review without creating a duplicate. Rich data is not part of the fallback identity match unless required to disambiguate otherwise identical candidates.
 
-### 20.4 API schema
+Any material rich-data change increments `review_corpus_version` exactly once per committed provider-page transaction, even when multiple reviews or fields change in that page. That increment makes existing BL-008 saved-review cursors stale. Omitted or malformed sections that preserve existing data, normalized no-op updates, and topic-only changes do not increment the corpus version.
+
+### 20.5 API schema and translated fields
 
 Review responses add optional defaults:
 
@@ -2107,9 +2590,11 @@ Review responses add optional defaults:
 }
 ```
 
-Empty maps and lists preserve compatibility for Google fallback and older stored rows. API responses enforce field-count, value-length, image-count, and URL-length limits.
+Empty maps and lists preserve compatibility for Google fallback and older stored rows. Always return both original `details` and `translated_details`. Return active images only, ordered by provider position and then a stable database-ID tie breaker.
 
-### 20.5 Review-card rendering
+Original details are authoritative for field existence and ordering. A translated value overrides only the displayed value when its normalized key uniquely matches an original key and the scalar/list shapes are compatible. An empty translated value does not replace a nonempty original. Normalized-key collisions and type mismatches fall back to the original. Retain translated-only keys in `translated_details`, but do not add them independently to the primary BL-009 display.
+
+### 20.6 Review-card rendering and image lifecycle
 
 Render recognized fields in this order when present:
 
@@ -2122,6 +2607,18 @@ Render recognized fields in this order when present:
 
 Use human-readable labels derived from an allowlisted key map. Remaining safe unknown keys render through a generic label/value row. Prefer translated values for the configured language and retain original values for fallback or disclosure.
 
+In the review header, render the overall numeric rating followed by the same number of visible stars: `1 ★`, `3 ★★★`, and `5 ★★★★★`. The repeated stars are decorative and hidden from assistive technology; the overall rating exposes one accessible label such as `3 out of 5 stars` so screen readers do not announce it twice. Apply this treatment only to validated integer overall ratings from 1 through 5. Structured sub-ratings such as food, service, and atmosphere remain plain numeric detail values.
+
+Render structured details as one compact responsive metadata grid rather than a full-width two-column definition list:
+
+- Keep one subtle shared background for the section; do not turn each field into a separate card or dashboard tile.
+- Place each label above its value and retain the recognized-field order defined above.
+- Use three columns on desktop, two columns on tablet and normal phone widths, and one column only when the viewport is too narrow for two readable columns.
+- Let long values such as recommended dishes, dietary notes, parking, and accessibility span the full grid row when needed.
+- Use content-driven height with no fixed or minimum height. Target approximately 14–16px section padding and 8–12px row spacing.
+- Do not render the details container when there are no displayable details. Keep the review-image gallery separate from the metadata grid.
+- Preserve safe generic rendering, translated-value selection, keyboard behavior, and horizontal-overflow protection at every breakpoint.
+
 Images render in an optional horizontally scrollable gallery:
 
 - Lazy loading and reserved dimensions to avoid layout shift
@@ -2129,20 +2626,48 @@ Images render in an optional horizontally scrollable gallery:
 - No automatic binary download or PostgreSQL storage
 - Direct review/source link and provider attribution
 - Keyboard-accessible expansion if a lightbox is introduced
+- Neutral accessible labels such as `Review photo 1`
+
+Image synchronization is scoped to the provider review origins that are actually present in the current provider page:
+
+- An omitted or malformed `images` field preserves the origin's current images.
+- A valid `images: []` snapshot deactivates every active image for that origin.
+- A valid nonempty snapshot upserts current URLs, updates their positions, and deactivates previously active URLs missing from the snapshot.
+- A review absent from the provider page causes no image change.
+- Duplicate URLs in a valid snapshot are deduplicated while preserving their first occurrence and position.
+- Deleting a review origin cascades its images; deleting a canonical review cascades its origins and images.
 
 Do not use the LLM to invent image captions, infer missing structured values, or turn review details into restaurant-level facts.
 
-### 20.6 URL and content safety
+### 20.7 URL, privacy, attribution, and content safety
 
-- Accept HTTPS URLs only.
-- Validate supported provider image hosts before rendering.
+- Accept only HTTPS image URLs whose normalized hostname exactly equals `lh3.googleusercontent.com`, `lh4.googleusercontent.com`, `lh5.googleusercontent.com`, or `lh6.googleusercontent.com`.
+- Normalize hostname case, IDNA, and a trailing dot before matching. Reject credentials, IP-literal hosts, and nonstandard ports.
+- Use exact-host matching only. Wildcards and suffix matching are forbidden, so `example.lh3.googleusercontent.com` does not match.
+- Do not initially allow SerpApi-hosted image URLs. Add a narrowly scoped exact host and path only after a captured Google Maps Reviews API fixture demonstrates that it is required.
 - Render structured values as text, never raw HTML.
+- Render direct images with `loading="lazy"`, `decoding="async"`, and `referrerpolicy="no-referrer"`.
+- Restrict the frontend Content Security Policy `img-src` to the exact supported hosts and use `rel="noopener noreferrer"` for external image/source links.
+- Show clear Google/SerpApi provider attribution and document that direct third-party loading exposes the viewer's IP address to the image host.
+- Do not log full image URLs.
 - Do not proxy or cache images until provider terms, cache lifetime, attribution, and deletion behavior have been reviewed.
 - Expect remote URLs to expire and keep the rest of the review usable.
 
-### 20.7 Migration and tests
+### 20.8 Migration and tests
 
-The Alembic migration adds nullable/default-compatible fields and backfills no invented data. Provider fixtures cover complete, partial, translated, unknown, malformed, and missing structures. Refresh tests cover added/removed details and images. API and frontend tests cover safe generic rendering, ordering, long values, broken images, empty fallbacks, keyboard use, and mobile overflow.
+The Alembic migration adds nullable/default-compatible fields, creates cascading image/origin relationships, and backfills no invented data.
+
+Provider, repository, API, and frontend tests cover:
+
+- Complete, partial, unknown, translated, malformed, omitted, explicitly empty, changed, and removed rich data
+- Every validation boundary, unsupported nested structures, non-finite numbers, and normalized-key collisions
+- Independent section validation and preservation of a previous valid snapshot after malformed input
+- Image-host rejection, URL deduplication, active-only output, reordering, missing-image deactivation, and deletion cascades
+- Original/translated matching, collision fallback, and compatible value shapes
+- Exactly one corpus-version increment per materially changed provider page, stale BL-008 cursors after that increment, and no increment for no-op, malformed-preserved, omitted, or topic-only changes
+- Compact three-column desktop details layout, responsive two/one-column breakpoints, full-row long values, content-driven height, omitted empty containers, and no horizontal overflow
+- Repeated-star rendering for integer overall ratings from 1 through 5, plain numeric structured sub-ratings, and a single nonduplicated accessible overall-rating label
+- Safe generic rendering, field ordering, broken images, attribution, accessible labels, keyboard use, CSP behavior, and mobile overflow
 
 ## 21. Planned Feature: Private Oracle and Tailscale Deployment
 
@@ -2269,6 +2794,280 @@ A future native iOS application can reuse the private FastAPI contract over the 
 - Restart, migration, rollback, backup, restore, secret rotation, and LLM-offline procedures are exercised.
 - Logs provide request/operation IDs without review text, author data, coordinates, or credentials.
 
+## 22. Planned Feature: Google-Relevance-First Review Ingestion
+
+Backlog tracking: [`BL-011 — Google relevance-first review ingestion and local sorting`](backlog.md#bl-011--google-relevance-first-review-ingestion-and-local-sorting). The backlog status is authoritative.
+
+### 22.1 Provider behavior and terminology
+
+SerpApi's Google Maps Reviews API accepts `sort_by=qualityScore`, which returns Google's most-relevant order. The response does not expose an absolute or comparable quality score per review. The only relevance signal available to this application is the review's ordinal position in that paginated response.
+
+Use the terms `Google most relevant`, `relevance rank`, and `relevance snapshot`. Do not label the stored ordinal as a quality score, confidence, credibility score, or reviewer-quality measure. Rank 1 only means the first review returned for that place, provider sort, language, and snapshot time.
+
+### 22.2 Primary ingestion flow
+
+The initial paid collection replaces `newestFirst` with `qualityScore` rather than adding a duplicate relevance-only request sequence. For the normal 50-review target:
+
+1. Request the initial `qualityScore` page, normally eight reviews.
+2. Assign ranks 1 through the number returned, in array order.
+3. Follow the response's next-page token with pages of up to 20.
+4. Continue ranks monotonically across pages until the accepted provider-record target, provider end, cancellation, or reserved request limit. Count processed provider records for predictable request bounds and report newly stored canonical reviews separately.
+5. Upsert canonical reviews and origins with the existing deduplication rules.
+6. Store provider ordering separately from canonical review content.
+7. Activate the new relevance snapshot atomically when it is usable.
+
+About four successful SerpApi searches are normally required for 50 results. Those are the initial review-ingestion searches, not four additional searches on top of a newest-first initial ingestion.
+
+Provider collection state is sort-bound and records at least place, provider, language, `qualityScore`, cursor, next rank, operation ID, and snapshot/generation. A cursor may be resumed only with the same bound values. Cursor-expiry recovery requires fresh cost confirmation and a new idempotency key.
+
+### 22.3 Local sort behavior
+
+The review API and unified filter API add `relevant` to the allowlisted sort enum. All five presentation modes run in PostgreSQL after data has been collected:
+
+- `relevant`: active relevance rank ascending, then publication timestamp descending, then review ID ascending
+- `recent`: publication timestamp descending, then review ID ascending
+- `oldest`: publication timestamp ascending, then review ID ascending
+- `rating_high`: rating descending, publication timestamp descending, then review ID ascending
+- `rating_low`: rating ascending, publication timestamp descending, then review ID ascending
+
+SerpApi supplies `iso_date` for restaurant reviews when available. The adapter normalizes it into the existing timezone-aware `reviews.publication_timestamp`; `iso_date_of_last_edit` remains separate in `last_edit_timestamp`. Most-recent and oldest sorts use publication time, never edit time, relevance fetch time, first-fetched time, or last-seen time. Missing publication timestamps sort last.
+
+The existing exact-rating filter is applied before ordering. Semantic filters continue selecting membership independently of presentation order, and then the selected reviews are returned in the requested saved SQL order. Changing only the sort does not rerun the LLM or change selected IDs.
+
+### 22.4 Completeness reconciliation
+
+SerpApi warns that the number of reviews returned may vary by sort option. A completed `qualityScore` walk is therefore a relevance snapshot, not a guarantee that every Google review was exposed.
+
+Provide a separate, explicit `Check for new reviews` operation using `newestFirst`. This operation:
+
+- Uses the existing BL-007 estimate, confirmation, reservation, idempotency, cancellation, and same-place lock behavior.
+- Uses a collection cursor bound to `newestFirst`, separate from relevance collection state.
+- Deduplicates into the same canonical review table.
+- Updates material fields for known reviews and inserts newly observed reviews.
+- Applies BL-001's known-unchanged streak shortcut.
+- Does not assign or infer relevance ranks.
+
+Under `relevant`, reviews observed only through reconciliation follow all currently ranked reviews and use the deterministic recent/ID fallback. A future `qualityScore` refresh may assign them ranks if Google returns them.
+
+### 22.5 Refresh and snapshot lifecycle
+
+`Refresh relevance` starts `qualityScore` from rank 1 and builds a replacement snapshot. The last completed snapshot remains readable while the operation runs. Cancellation, budget exhaustion before the minimum usable target, malformed pagination, or provider failure must preserve the prior active snapshot.
+
+On successful activation:
+
+- Replace active ranks for the same place/provider/language as one logical change.
+- Record `relevance_fetched_at`, ranked count, stop reason, and provider request accounting.
+- Increment `review_corpus_version` once so saved-review cursors cannot mix two relevance orders.
+- Invalidate frontend saved-review pages for that restaurant.
+
+Extending a valid active `qualityScore` cursor through `Fetch more relevant reviews` appends ranks after the saved next rank. If the cursor expires, restart from rank 1 rather than guessing the continuation.
+
+### 22.6 Frontend behavior
+
+- Add the concise `Most relevant` label as the first sort option when an active relevance snapshot exists. Omit it when unavailable rather than placing a long disabled status inside the native select.
+- Use it as the default after a relevance snapshot exists.
+- For historical restaurants without a relevance snapshot, default to `Most recent`, omit the unavailable option, and show the separate concise status `Relevance not fetched` rather than silently treating recency as relevance.
+- Selecting any already-saved sort is free and never starts provider work.
+- Keep `Show more saved reviews` distinct from paid `Fetch more relevant reviews`, `Refresh relevance`, and `Check for new reviews` actions.
+- Display the relevance snapshot timestamp in the developer drawer or provider-action area, not on every review card.
+- Do not display the internal ordinal as though it were a user-facing review score.
+
+### 22.7 Migration and compatibility
+
+- Add the relevance-rank persistence described in Section 6.3.1 and active snapshot metadata to provider collection state.
+- Existing canonical review rows require no rewrite and begin without relevance membership.
+- Existing `newestFirst` provider cursors remain tagged as such; do not reinterpret them as `qualityScore` cursors.
+- Change the configured primary review sort default to `qualityScore`, but validate the setting against an allowlist rather than accepting an arbitrary provider value.
+- API clients that omit `sort` receive the best available default; explicit existing sort values remain backward compatible.
+
+### 22.8 Verification
+
+Tests must cover:
+
+- Rank assignment across the initial 8-result page and subsequent pages.
+- Deduplication when ranked reviews already exist canonically.
+- No duplicate review rows when the same review appears in relevance and newest-first operations.
+- Stable relevant keyset pagination, equal/missing ranks, null timestamps, and review-ID ties.
+- Cursor binding across place, provider, language, and provider sort.
+- Atomic snapshot replacement and preservation after failure or cancellation.
+- Corpus-version invalidation exactly once on snapshot activation.
+- Newest-first reconciliation leaving relevance ranks unchanged.
+- Local recent/oldest/rating sorts making no provider or LLM requests.
+- Frontend default/fallback states, cost-confirmed provider actions, reset behavior, mobile overflow, and distinction between free saved paging and paid collection.
+
+## 23. Planned Feature: Google Review Summary and Local Food Recommendations
+
+Backlog tracking: [`BL-012 — Google review summary and local food recommendations`](backlog.md#bl-012--google-review-summary-and-local-food-recommendations). The backlog status is authoritative; this section is the detailed implementation contract.
+
+### 23.1 Product boundary
+
+Restaurant insights contain two independent artifacts:
+
+- `Review summary` is Google's provider-owned AI summary fetched from Places API (New). It is displayed verbatim with Google's disclosure and action links.
+- `What reviewers recommend` is generated by the home/local LLM from reviews already saved in this application's canonical database. It is structured, evidence-linked, and explicitly labeled as local.
+
+Never concatenate the two, use Google's attribution on the local result, imply that Google produced the local recommendations, or extract a structured Google dish ranking from Google's narrative summary. The local pipeline does not use Google's summary as model input; it derives recommendations from saved reviews so its evidence can be inspected in this application.
+
+Google Places content is also subject to Google's caching restrictions. The official summary is transient display content: the API proxies one explicitly requested response to the current client, but its text, disclosure, and URLs are never persisted or put into a browser/service-worker cache. Only the locally generated artifact is stored as an application snapshot.
+
+### 23.2 Provider capability and source selection
+
+Google Places API (New) supports `reviewSummary` in Place Details (New). The field is not guaranteed for every place and is billed under Place Details Enterprise + Atmosphere. The request field mask is deliberately narrow:
+
+```text
+id,
+reviewSummary.text,
+reviewSummary.disclosureText,
+reviewSummary.reviewsUri,
+reviewSummary.flagContentUri
+```
+
+The adapter stores the returned text and attribution fields without rewriting them. A valid response without the field becomes a saved `unavailable` outcome.
+
+SerpApi documents `place_results.user_reviews.summary` as selected review excerpts. That is not the same structured contract as Google's official AI `reviewSummary`, and it lacks the complete official attribution contract. BL-012 therefore uses Google Places as the authoritative source and makes no additional SerpApi place-results request. A SerpApi summary adapter is out of scope until a live fixture demonstrates a stable official-summary object containing every required field.
+
+Google's separate `generativeSummary` may highlight popular products or foods, but it uses broader place data and is not the review-only artifact requested here. It is not fetched in BL-012.
+
+### 23.3 Explicit acquisition and cost controls
+
+Summary acquisition is never implicit. Autocomplete, search results, place selection, review sync, free saved-review paging, filter/sort changes, and page reloads make no summary request.
+
+When no volatile Google summary is currently displayed, the UI offers `Fetch Google review summary` and discloses one potentially billable Place Details Enterprise + Atmosphere request. The backend uses the persisted accounting and reservation parts of the BL-007 operation pattern with:
+
+- `provider=google_places`
+- `operation_type=google_review_summary`
+- A Google-specific budget/reservation period rather than the SerpApi allowance
+- Explicit confirmation and idempotency key
+- One-place conflict protection, duplicate-submit protection, and conservative settlement
+
+Google operations are separately reportable in the developer drawer. Account-API reconciliation described for SerpApi is not assumed for Google; configured quota and local settlement are advisory protection, while Cloud Billing remains authoritative.
+
+The single Google request runs synchronously after reservation because the response cannot be persisted for later polling. Its typed response is rendered in volatile client memory only. The operation row retains requested/settled units, timestamps, status, and a stable available/unavailable/error code, but no summary, disclosure, URI, raw body, or response JSON.
+
+Sorting, filtering, and saved-review paging while the restaurant remains mounted do not refetch or clear the volatile summary. Reloading, changing restaurants, or returning in a later session requires another explicit confirmed fetch. A failed later fetch does not clear content still held in volatile UI memory.
+
+### 23.4 Persistence
+
+Add `food_recommendation_snapshots` for local output only:
+
+- `id` UUID primary key
+- `place_id` foreign key with cascade on place deletion
+- Normalized `language_code`
+- `status`: `available`, `failed`, or `superseded`
+- Validated recommendation `payload` JSONB
+- Exact `review_corpus_version`
+- `model_id`, `prompt_version`, and `schema_version`
+- `source_review_count`
+- Nullable local operation ID
+- `created_at`, `generated_at`, and nullable `superseded_at`
+
+Enforce one active local snapshot per place and normalized language with a partial unique index. Build replacements separately and switch the active snapshot atomically. A failed run is operation history, not an active snapshot.
+
+The local JSON payload is validated with Pydantic before persistence and again at the API boundary. Review deletion invalidates or removes local snapshots because their evidence no longer exists. Place deletion cascades to local snapshots.
+
+Google content has no snapshot table. Its transient response is validated with a separate Pydantic model. Action links must be HTTPS and match an explicit Google hostname allowlist using exact-host or dot-delimited subdomain matching; a suffix such as `evilgoogle.com` must not pass. Render links with `rel="noopener noreferrer"` and a restrictive referrer policy. Never persist or render provider HTML. Provider-operation persistence contains accounting/status fields only.
+
+### 23.5 Local recommendation input and batching
+
+`Generate food recommendations` is available after canonical reviews have been saved. It makes no provider request and is not triggered by review sync, load-more, refresh, filter, sort, or navigation.
+
+Input is limited to:
+
+- Canonical review UUID
+- Review text or original text selected by the normal display-language rule
+- Rating
+- Normalized publication time
+- Already stored structured fields relevant to dishes, such as recommended dishes
+
+Do not send reviewer profile/history, avatar URL, inferred demographics, or contributor location. Provider topics may prioritize candidate retrieval but do not count as recommendation evidence by themselves.
+
+Batch by tokenizer count and preserve the review as the atomic unit. A review is never split across batches. A single review larger than the normal batch budget runs alone if it fits the model's safe context limit. If it exceeds that limit, truncate only its free text at a token boundary, append an explicit truncation marker, and keep its ID/rating/structured fields. Record truncation in operation metrics.
+
+### 23.6 Map/reduce and validation
+
+The map phase treats review content as untrusted evidence and emits strict JSON containing normalized item candidates, display names, stance (`positive`, `mixed`, `negative`, or `neutral`), and supporting canonical review UUIDs. Prompts explicitly prohibit following instructions found inside a review.
+
+The reduce phase:
+
+1. Rejects IDs that are malformed, duplicated, from another place, absent from the exact input corpus, or no longer present.
+2. Counts one canonical review once per normalized item so duplicate provider origins cannot inflate evidence.
+3. Conservatively merges obvious item aliases while keeping uncertain names separate.
+4. Aggregates positive separately from mixed/negative evidence.
+5. Produces no recommendation from rating alone, a neutral mention, or a complaint.
+6. Abstains when evidence is insufficient.
+
+The final payload contains an overview, zero to eight recommendations, caveats, the number of reviews considered, and the analyzed corpus version. Each recommendation contains a display name, reason of at most 500 characters, positive count, mixed-or-negative count, `strong`/`moderate`/`limited` evidence level, and same-place evidence review IDs. At most three evidence reviews are expanded initially, though all validated IDs may be retained for local filtering.
+
+Evidence level describes the amount and consistency of observed saved-review support. It is not model certainty, objective quality, a menu guarantee, or a reviewer credibility score. The response always warns that menu items, ingredients, price, and availability can change.
+
+### 23.7 Versioning and stale results
+
+The local cache key is:
+
+```text
+(place_id, review_corpus_version, language_code, model_id, prompt_version, schema_version)
+```
+
+A matching completed snapshot returns without an LLM call. A change to canonical review text, rating, rich dish details, review membership, or relevance/order data that already increments `review_corpus_version` makes the local result stale. Generating insights does not increment the corpus version.
+
+Stale output may remain visible with `Based on an earlier saved review set`, its timestamp, and an explicit `Regenerate` action. Never regenerate automatically. If the corpus changes during generation, the result cannot be published as current; preserve it against the analyzed version as stale or discard it while retaining the previous valid current snapshot.
+
+An unavailable LLM does not affect database reads or a volatile Google result already displayed in the current view. Generation failure, cancellation, invalid JSON, validation rejection, or timeout never replaces the last valid local snapshot.
+
+### 23.8 API
+
+```http
+GET /api/v1/restaurants/{place_id}/insights
+POST /api/v1/restaurants/{place_id}/insights/google-review-summary
+POST /api/v1/restaurants/{place_id}/insights/food-recommendations
+```
+
+`GET .../insights` is database-only. It returns the optional local snapshot, current corpus version, local stale/availability state, and non-content operation metadata; it never returns saved Google content or contacts Google, SerpApi, or the LLM.
+
+The Google mutation accepts confirmation and idempotency inputs, reserves one Google unit, performs one synchronous upstream request, validates the response, settles accounting, and returns `200` with a transient typed summary/unavailable result plus non-content operation metadata. The client disables resubmission while pending. An active duplicate key joins or conflicts without starting a second billed request; a completed key cannot replay content that was intentionally not stored, so a later explicit fetch uses a new key.
+
+The local mutation returns `202` with a persisted local insight-operation ID, uses `LLM_MAX_CONCURRENCY`, and reserves no provider budget. Local operation polling survives reload. Do not misclassify local generation as a SerpApi/Google provider operation merely to reuse UI code.
+
+Stable errors include `FEATURE_DISABLED`, `NO_SAVED_REVIEWS`, `GOOGLE_REVIEW_SUMMARY_UNAVAILABLE`, `INVALID_PROVIDER_ATTRIBUTION`, `LLM_UNAVAILABLE`, `INVALID_MODEL_OUTPUT`, `STALE_CORPUS_DURING_GENERATION`, and `OPERATION_CONFLICT`.
+
+### 23.9 Presentation and attribution
+
+Place a compact `Restaurant insights` region above review topics and controls. Do not render a blank bordered region when both artifacts are absent. The two subsections are stacked and independently collapsible:
+
+1. `Review summary`
+2. `What reviewers recommend`
+
+Google presentation must use the heading exactly `Review summary` and include the complete returned text, unchanged localized disclosure immediately beneath it, `About this summary`, `Report summary`, `See reviews`, and visible Google Maps attribution in the same clearly distinguished container. `About this summary` uses Google's required fixed support link; report and reviews actions use the returned URIs. Provider prose is not truncated, summarized, or combined with local prose.
+
+Keep this content only in volatile application/component memory for the mounted restaurant view. Never put it in PostgreSQL, provider-operation result JSON, logs, `localStorage`, `sessionStorage`, IndexedDB, persisted query caches, analytics/error-reporting payloads, or a service-worker cache.
+
+Local presentation says `Generated locally from saved reviews`, includes source review count and generation time, and renders recommendation items with positive and mixed/negative evidence counts. Expanding an item reveals supporting saved review cards. This supporting-review interaction is a local ID filter, not another semantic model/provider call, and closing it restores the prior review-list filters, pages, focus, and scroll position.
+
+When evidence is weak or absent, the UI uses neutral language and abstains. It must not claim `best dish`, universal consensus, dietary/allergy safety, or current availability. The mobile view is single-column, has no horizontal overflow, and does not leave placeholder space for unavailable sections.
+
+### 23.10 Privacy and operational behavior
+
+- Review bodies, prompts, model output, provider summary prose, and action URLs are excluded from application logs.
+- Logs include request/operation IDs, counts, durations, model/prompt/schema versions, truncation counts, and stable error codes.
+- Local recommendations are informational observations from saved public reviews, not medical, allergy, nutritional, or professional advice.
+- Existing feature gates gain separate controls for Google summary acquisition and local recommendation generation so private deployments can enable either independently.
+- Saved local results remain readable when generation is disabled, unless the deployment explicitly configures a stricter privacy mode. Google summaries are never saved.
+
+### 23.11 Verification
+
+Tests must cover:
+
+- A Google response with a summary and a valid response without one.
+- Exact field-mask construction, independent Google cost reservation, duplicate-submit/idempotency behavior, settlement, and current-view preservation after a failed later fetch.
+- Exact provider text/disclosure rendering, Google Maps attribution, fixed `About` action, returned report/reviews actions, malicious hostname rejection, and no HTML injection.
+- Absence of Google summary text, disclosure, URIs, and raw response bodies from database rows, operation results, logs, browser storage, persisted query caches, and service-worker caches.
+- SerpApi review-summary excerpts never entering the official Google summary path.
+- Database-only insights reads and zero implicit acquisition during search, selection, sync, paging, sort, and reload.
+- Token-aware review-boundary batching, a single oversized review, deterministic truncation metrics, and prompt injection inside review text.
+- Positive, neutral, mixed, and negative mentions; alias merging; duplicate origins; duplicate IDs; hallucinated IDs; wrong-place IDs; and empty/insufficient evidence.
+- Cache hits, model/prompt/schema version changes, corpus-version staleness, corpus mutation during generation, and old-snapshot preservation after every failure mode.
+- Recommendation expansion restoring filters/focus/scroll, responsive single-column rendering, keyboard access, screen-reader labels, and no empty insight container.
+
 ## References
 
 - [Google Places Autocomplete (New)](https://developers.google.com/maps/documentation/places/web-service/place-autocomplete)
@@ -2276,10 +3075,12 @@ A future native iOS application can reuse the private FastAPI contract over the 
 - [Google Autocomplete session pricing](https://developers.google.com/maps/documentation/javascript/session-pricing)
 - [Google Maps Platform pricing](https://developers.google.com/maps/billing-and-pricing/pricing)
 - [Google Place Details field/SKU classifications](https://developers.google.com/maps/documentation/places/web-service/place-details)
+- [Google AI-powered review summaries](https://developers.google.com/maps/documentation/places/web-service/review-summaries)
 - [Google Places review schema](https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places)
 - [Google Places policies and attribution](https://developers.google.com/maps/documentation/places/web-service/policies)
 - [Google Maps Platform Terms](https://cloud.google.com/maps-platform/terms)
 - [SerpApi Google Maps Reviews API](https://serpapi.com/google-maps-reviews-api)
+- [SerpApi Google Maps Place Results API](https://serpapi.com/maps-place-results)
 - [SerpApi Google Maps Contributor Reviews API](https://serpapi.com/google-maps-contributor-reviews-api)
 - [SerpApi pricing](https://serpapi.com/pricing)
 - [SerpApi legal terms](https://serpapi.com/legal)

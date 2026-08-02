@@ -46,9 +46,10 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
       SERPAPI_DEFAULT_REVIEW_LIMIT: ${SERPAPI_DEFAULT_REVIEW_LIMIT:-50}
-      SERPAPI_REVIEW_SORT: ${SERPAPI_REVIEW_SORT:-newestFirst}
+      SERPAPI_REVIEW_SORT: ${SERPAPI_REVIEW_SORT:-qualityScore}
       SERPAPI_LANGUAGE: ${SERPAPI_LANGUAGE:-en}
       SERPAPI_MONTHLY_REQUEST_BUDGET: ${SERPAPI_MONTHLY_REQUEST_BUDGET:-225}
+      REVIEWER_CONTEXT_ENABLED: ${REVIEWER_CONTEXT_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +74,7 @@ services:
         required: false
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+      VITE_REVIEWER_CONTEXT_ENABLED: ${VITE_REVIEWER_CONTEXT_ENABLED:-true}
     depends_on:
       api:
         condition: service_healthy

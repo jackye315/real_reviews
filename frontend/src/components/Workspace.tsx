@@ -8,7 +8,7 @@ export function Workspace(props: WorkspaceProps) {
       <aside className={`${props.mobilePane === 'reviews' ? 'hidden' : 'block'} h-full min-h-0 overflow-y-auto overscroll-contain border-r border-[#DED8CE] lg:block`}>
         <SearchPane {...props} />
       </aside>
-      <section className={`${props.mobilePane === 'results' ? 'hidden' : 'block'} h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain lg:block`}>
+      <section ref={props.reviewPaneRef} data-testid="review-pane" className={`${props.mobilePane === 'results' ? 'hidden' : 'block'} h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain lg:block`}>
         <RestaurantReviewPane {...props} />
       </section>
     </section>

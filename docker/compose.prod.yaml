@@ -27,6 +27,7 @@ services:
       GOOGLE_MAPS_SERVER_API_KEY: ${GOOGLE_MAPS_SERVER_API_KEY}
       SERPAPI_API_KEY: ${SERPAPI_API_KEY}
       SERPAPI_LANGUAGE: ${SERPAPI_LANGUAGE:-en}
+      REVIEWER_CONTEXT_ENABLED: ${REVIEWER_CONTEXT_ENABLED:-false}
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_MODEL: ${LLM_MODEL}
       LLM_API_KEY: ${LLM_API_KEY}
@@ -38,6 +39,8 @@ services:
     build:
       context: ../frontend
       target: production
+      args:
+        VITE_REVIEWER_CONTEXT_ENABLED: ${VITE_REVIEWER_CONTEXT_ENABLED:-false}
     environment:
       VITE_API_BASE_URL: /api/v1
     restart: unless-stopped

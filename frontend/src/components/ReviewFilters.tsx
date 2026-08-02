@@ -10,6 +10,7 @@ export function ReviewFilters({
   reviewerLabel,
   setReviewerLabel,
   reviewerLabelOptions,
+  relevanceAvailable,
   filterPending,
   canFilter,
   effectiveTotal,
@@ -55,6 +56,7 @@ export function ReviewFilters({
           className="min-h-11 rounded-xl border border-[#CFC6BA] bg-[#FFFDFC] px-3 py-2 text-[#24313A] outline-none ring-[#B7462D] focus:ring-2 disabled:cursor-wait disabled:opacity-60"
           aria-label="Review sort"
         >
+          {relevanceAvailable && <option value="relevant">Most relevant</option>}
           <option value="recent">Most recent</option>
           <option value="oldest">Oldest</option>
           <option value="rating_high">Highest rated</option>

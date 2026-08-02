@@ -7,11 +7,13 @@ from uuid import UUID
 
 import httpx
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import AppError
 from app.models.review import Review
+from app.models.review_collection_state import ReviewCollectionState
 from app.repositories.places import PlaceRepository
 from app.repositories.reviews import ReviewRepository
 from app.schemas.reviews import (
@@ -20,6 +22,7 @@ from app.schemas.reviews import (
     ReviewFilterOptionsResponse,
     ReviewFilterResponse,
     ReviewerLabelOption,
+    ReviewSort,
 )
 from app.services.reviews import review_to_response, topic_to_response
 
@@ -51,7 +54,16 @@ class ReviewFilterService:
         if place is None:
             raise AppError("PLACE_NOT_FOUND", "Place is not stored. Select or persist it first.", 404)
 
-        candidates = await self.reviews.list_for_place(place, rating=request.rating, sort=request.sort)
+        relevance_snapshot_id = None
+        if request.sort == ReviewSort.RELEVANT:
+            relevance_snapshot_id = await self.session.scalar(
+                select(ReviewCollectionState.active_snapshot_id).where(
+                    ReviewCollectionState.place_id == place.id,
+                    ReviewCollectionState.provider == settings.review_provider,
+                    ReviewCollectionState.provider_sort == "qualityScore",
+                )
+            )
+        candidates = await self.reviews.list_for_place(place, rating=request.rating, sort=request.sort, relevance_snapshot_id=relevance_snapshot_id)
         total = await self.reviews.count_for_place(place)
         candidate_count = len(candidates)
         topics = await self.reviews.list_topics_for_place(place)
@@ -88,7 +100,7 @@ class ReviewFilterService:
             selected_sets.append(await self._filter_by_content(candidates, request.content_filter))
 
         selected_ids = set.intersection(*selected_sets) if selected_sets else {item.id for item in candidates}
-        selected_reviews = await self.reviews.list_for_place_by_ids(place, selected_ids, sort=request.sort)
+        selected_reviews = await self.reviews.list_for_place_by_ids(place, selected_ids, sort=request.sort, relevance_snapshot_id=relevance_snapshot_id)
         return ReviewFilterResponse(
             reviews=[review_to_response(item) for item in selected_reviews],
             total=total,

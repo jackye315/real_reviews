@@ -29,7 +29,7 @@ export default defineConfig({
     },
     {
       name: 'chromium-desktop',
-      testMatch: /responsive\.spec\.ts/,
+      testMatch: /(?:responsive|pagination|reviewer-context)\.spec\.ts/,
       use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } }
     },
     {

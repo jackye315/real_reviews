@@ -14,6 +14,9 @@ function review(id: string, rating: number | null): Review {
     author_display_name: null,
     author_avatar_url: null,
     source_labels: [],
+    details: {},
+    translated_details: {},
+    images: [],
     first_fetched_at: new Date(0).toISOString(),
     last_seen_at: new Date(0).toISOString(),
     suspected_duplicate: false

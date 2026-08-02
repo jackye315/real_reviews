@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import * as api from './lib/api'
-import type { PlaceResponse, RestaurantSearchResult, Review } from './types/api'
+import type { PlaceResponse, RestaurantSearchResult, Review, ReviewerComparison } from './types/api'
 
 vi.mock('./components/Autocomplete', () => ({
   Autocomplete: ({ onSelected }: { onSelected: (selection: unknown) => void }) => (
@@ -25,12 +25,24 @@ vi.mock('./components/Autocomplete', () => ({
 }))
 
 vi.mock('./lib/api', () => ({
+  cancelProviderOperation: vi.fn(),
+  checkForNewReviews: vi.fn(),
   filterReviews: vi.fn(),
+  getLoadMoreOptions: vi.fn(),
+  getProviderOperation: vi.fn(),
+  getProviderOperations: vi.fn(),
   getProviderUsage: vi.fn(),
   getReviewFilterOptions: vi.fn(),
+  getRestaurantDetail: vi.fn(),
+  getReviewerComparison: vi.fn(),
+  getReviewerContext: vi.fn(),
   getReviews: vi.fn(),
+  loadMoreReviews: vi.fn(),
+  startReviewerContext: vi.fn(),
+  deleteReviewerContext: vi.fn(),
   persistSearchResult: vi.fn(),
   persistSelection: vi.fn(),
+  newIdempotencyKey: vi.fn(() => 'test-idempotency-key'),
   refreshReviews: vi.fn(),
   searchRestaurants: vi.fn(),
   syncReviews: vi.fn()
@@ -60,7 +72,11 @@ const review = (): Review => ({
   canonical_source_url: null,
   author_display_name: 'Reviewer',
   author_avatar_url: null,
+  reviewer_id: 'reviewer-1',
   source_labels: ['Google'],
+  details: {},
+  translated_details: {},
+  images: [],
   first_fetched_at: new Date(0).toISOString(),
   last_seen_at: new Date(0).toISOString(),
   suspected_duplicate: false
@@ -80,6 +96,28 @@ const result = (id: string, name: string): RestaurantSearchResult => ({
   distance_meters: 804
 })
 
+const reviewerComparison = (
+  matchLevel: ReviewerComparison['match_level'],
+  timeWindow: ReviewerComparison['time_window'],
+  sampleSize: number
+): ReviewerComparison => ({
+  current_rating: 2,
+  match_level: matchLevel,
+  normalized_venue_type: 'tibetan_restaurant',
+  comparison_family: 'restaurant',
+  time_window: timeWindow,
+  sample_size: sampleSize,
+  average_rating: sampleSize ? 4.7 : null,
+  median_rating: sampleSize ? 5 : null,
+  standard_deviation: sampleSize ? 1 : null,
+  difference_from_average: sampleSize ? -2.7 : null,
+  rating_distribution: sampleSize
+    ? { '1': 1, '2': 0, '3': 0, '4': 1, '5': sampleSize - 2 }
+    : { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
+  individual_ratings: [],
+  contains_approximate_dates: true
+})
+
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
@@ -90,6 +128,7 @@ function renderApp() {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/')
   vi.mocked(api.searchRestaurants).mockResolvedValue({
     results: [result('place-1', 'First Noodles'), result('place-2', 'Second Sushi')],
     next_page_token: 'next-page'
@@ -97,14 +136,16 @@ beforeEach(() => {
   vi.mocked(api.persistSearchResult).mockImplementation(async (item) => place(item.google_place_id, item.display_name))
   vi.mocked(api.persistSelection).mockResolvedValue(place('auto-place', 'Autocomplete Cafe'))
   vi.mocked(api.getReviews).mockResolvedValue({ reviews: [], total: 0, filtered_total: 0, topics: [], topics_fetched_at: null })
+  vi.mocked(api.getReviewerContext).mockResolvedValue({ reviewer: { id: 'reviewer-1', display_name: 'Reviewer', context_generation: 0, context_status: 'not_loaded' }, current: { review: review(), restaurant_name: 'First Noodles', restaurant_place_id: 'place-1', normalized_venue_type: 'restaurant', comparison_family: 'restaurant' }, comparison: null, broader_comparison: null, active_operation_id: null, stale: false })
+  vi.mocked(api.getProviderOperations).mockResolvedValue([])
+  vi.mocked(api.getLoadMoreOptions).mockResolvedValue({ cursor_available: false, remaining_effective_budget: 225, choices: [] })
   vi.mocked(api.getReviewFilterOptions).mockResolvedValue({
     reviewer_label_options: [
       { value: 'chinese', label: 'Chinese' },
       { value: 'korean', label: 'Korean' },
       { value: 'japanese', label: 'Japanese' },
       { value: 'american', label: 'American' },
-      { value: 'hispanic', label: 'Hispanic' },
-      { value: 'indian', label: 'Indian' }
+      { value: 'italian', label: 'Italian' }
     ]
   })
   vi.mocked(api.filterReviews).mockResolvedValue({
@@ -213,8 +254,8 @@ describe('App split workspace', () => {
     fireEvent.click(await screen.findByText('First Noodles'))
 
     await screen.findByText('Great outdoor seating.')
-    fireEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
-    expect(await screen.findByText(/refreshing reviews from serpapi/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^refresh relevance$/i }))
+    expect(await screen.findByText(/refreshing relevance from serpapi/i)).toBeInTheDocument()
 
     finishRefresh?.({
       place_id: 'place-1',
@@ -230,7 +271,7 @@ describe('App split workspace', () => {
       message: null
     })
 
-    expect(await screen.findByText(/refresh completed: 2 new review\(s\), 1 stored review\(s\), 1 topic\(s\), and 1 upstream request\(s\)/i)).toBeInTheDocument()
+    expect(await screen.findByText(/refresh completed: 2 new review\(s\), 1 stored review\(s\), and 1 upstream request\(s\)/i)).toBeInTheDocument()
   })
 
   it('shows refresh failures in the restaurant review pane', async () => {
@@ -248,7 +289,7 @@ describe('App split workspace', () => {
     fireEvent.click(await screen.findByText('First Noodles'))
 
     await screen.findByText('Great outdoor seating.')
-    fireEvent.click(screen.getByRole('button', { name: /^refresh$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^refresh relevance$/i }))
 
     expect(await screen.findByText(/refresh failed: internal server error/i)).toBeInTheDocument()
   })
@@ -269,14 +310,38 @@ describe('App split workspace', () => {
     await screen.findByLabelText(/exact rating/i)
     expect(screen.getByText(/1 of 2 reviews/i)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText(/exact rating/i), { target: { value: '4' } })
-    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'recent'))
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'recent', 20, null))
 
     expect(await screen.findByLabelText(/reviewer label/i)).toHaveDisplayValue('Any reviewer label')
-    fireEvent.change(await screen.findByLabelText(/review sort/i), { target: { value: 'rating_high' } })
-    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'rating_high'))
+    const reviewSortSelect = await screen.findByLabelText(/review sort/i)
+    expect(within(reviewSortSelect).queryByRole('option', { name: 'Most relevant' })).not.toBeInTheDocument()
+    expect(screen.getByText('Relevance not fetched')).toBeInTheDocument()
+    fireEvent.change(reviewSortSelect, { target: { value: 'rating_high' } })
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', 4, 'rating_high', 20, null))
 
     fireEvent.click(await screen.findByRole('button', { name: /reset/i }))
-    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', null, 'recent'))
+    await waitFor(() => expect(api.getReviews).toHaveBeenCalledWith('place-1', null, 'recent', 20, null))
+  })
+
+  it('shows a concise most-relevant sort only when a relevance snapshot exists', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      reviews: [review()],
+      total: 1,
+      filtered_total: 1,
+      relevance_available: true,
+      relevance_status: 'complete',
+      relevance_ranked_count: 1,
+      topics: [],
+      topics_fetched_at: null
+    })
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+
+    const reviewSortSelect = await screen.findByLabelText(/review sort/i)
+    expect(within(reviewSortSelect).getByRole('option', { name: 'Most relevant' })).toBeInTheDocument()
+    await waitFor(() => expect(reviewSortSelect).toHaveDisplayValue('Most relevant'))
   })
 
   it('loads reviewer-label options from backend and submits unified label filter', async () => {
@@ -293,12 +358,12 @@ describe('App split workspace', () => {
     fireEvent.click(await screen.findByText('First Noodles'))
 
     const reviewerSelect = await screen.findByLabelText(/reviewer label/i)
-    await screen.findByRole('option', { name: 'Chinese' })
+    await screen.findByRole('option', { name: 'Jack' })
     expect(api.getReviewFilterOptions).toHaveBeenCalled()
-    fireEvent.change(reviewerSelect, { target: { value: 'chinese' } })
+    fireEvent.change(reviewerSelect, { target: { value: 'jack' } })
 
     await waitFor(() => expect(api.filterReviews).toHaveBeenCalledWith('place-1', expect.objectContaining({
-      reviewer_label: 'chinese',
+      reviewer_label: 'jack',
       content_filter: null,
       sort: 'recent'
     })))
@@ -340,6 +405,78 @@ describe('App split workspace', () => {
     const dialog = await screen.findByRole('dialog', { name: /provider usage/i })
     expect(await within(dialog).findByText('serpapi')).toBeInTheDocument()
     expect(api.getProviderUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the workspace and restaurant header while reviewer context replaces only reviews', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({ reviews: [review()], total: 1, filtered_total: 1, topics: [], topics_fetched_at: null })
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'sushi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+    fireEvent.click(await screen.findByRole('button', { name: /reviewer/i }))
+    expect(await screen.findByRole('heading', { name: 'Reviewer' })).toBeInTheDocument()
+    expect(screen.getByText('Second Sushi')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'First Noodles' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /open filters/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /back to reviews/i }))
+    expect(await screen.findByText('Great outdoor seating.')).toBeInTheDocument()
+  })
+
+  it('requests exact and broader comparisons for the same changed time window', async () => {
+    const exactTwoYears = reviewerComparison('exact_type', 'two_years', 0)
+    const broaderTwoYears = reviewerComparison('comparison_family', 'two_years', 15)
+    vi.mocked(api.getReviews).mockResolvedValue({ reviews: [review()], total: 1, filtered_total: 1, topics: [], topics_fetched_at: null })
+    vi.mocked(api.getReviewerContext).mockResolvedValue({
+      reviewer: {
+        id: 'reviewer-1',
+        display_name: 'Reviewer',
+        context_generation: 1,
+        context_status: 'available',
+        provider_results_returned: 50,
+        accepted_food_and_drink_count: 29
+      },
+      current: {
+        review: { ...review(), rating: 2 },
+        restaurant_name: 'First Noodles',
+        restaurant_place_id: 'place-1',
+        normalized_venue_type: 'tibetan_restaurant',
+        comparison_family: 'restaurant'
+      },
+      comparison: exactTwoYears,
+      broader_comparison: broaderTwoYears,
+      active_operation_id: null,
+      stale: false
+    })
+    vi.mocked(api.getReviewerComparison).mockImplementation(
+      async (_reviewerId, _reviewId, timeWindow, matchLevel) =>
+        reviewerComparison(
+          matchLevel as ReviewerComparison['match_level'],
+          timeWindow as ReviewerComparison['time_window'],
+          matchLevel === 'exact_type' ? 0 : 8
+        )
+    )
+
+    renderApp()
+    fireEvent.change(screen.getByLabelText(/free-form restaurant search/i), { target: { value: 'noodles' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    fireEvent.click(await screen.findByText('First Noodles'))
+    fireEvent.click(await screen.findByRole('button', { name: /reviewer/i }))
+    fireEvent.change(await screen.findByLabelText(/window/i), { target: { value: 'one_year' } })
+
+    await waitFor(() => {
+      expect(api.getReviewerComparison).toHaveBeenCalledWith(
+        'reviewer-1',
+        'review-1',
+        'one_year',
+        'exact_type'
+      )
+      expect(api.getReviewerComparison).toHaveBeenCalledWith(
+        'reviewer-1',
+        'review-1',
+        'one_year',
+        'comparison_family'
+      )
+    })
   })
 
   it('supports mobile-style back navigation from search-result reviews to preserved results', async () => {

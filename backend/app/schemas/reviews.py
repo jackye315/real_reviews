@@ -10,10 +10,17 @@ from app.schemas.common import APIModel
 
 
 class ReviewSort(StrEnum):
+    RELEVANT = "relevant"
     RECENT = "recent"
     OLDEST = "oldest"
     RATING_HIGH = "rating_high"
     RATING_LOW = "rating_low"
+
+
+class ReviewImageResponse(APIModel):
+    url: str
+    position: int
+    provider: str
 
 
 class ReviewResponse(APIModel):
@@ -26,7 +33,11 @@ class ReviewResponse(APIModel):
     canonical_source_url: str | None = None
     author_display_name: str | None = None
     author_avatar_url: str | None = None
+    reviewer_id: UUID | None = None
     source_labels: list[str] = Field(default_factory=list)
+    details: dict = Field(default_factory=dict)
+    translated_details: dict = Field(default_factory=dict)
+    images: list[ReviewImageResponse] = Field(default_factory=list)
     first_fetched_at: datetime
     last_seen_at: datetime
     suspected_duplicate: bool = False
@@ -42,10 +53,45 @@ class ReviewTopicResponse(APIModel):
 
 class ReviewListResponse(APIModel):
     reviews: list[ReviewResponse]
+    page_size: int = 20
+    next_cursor: str | None = None
+    has_more: bool = False
+    review_corpus_version: int = 1
     total: int
     filtered_total: int
     topics: list[ReviewTopicResponse] = Field(default_factory=list)
     topics_fetched_at: datetime | None = None
+    relevance_available: bool = False
+    relevance_fetched_at: datetime | None = None
+    relevance_ranked_count: int = 0
+    relevance_status: str | None = None
+
+
+class LoadMoreRequest(APIModel):
+    additional_target_count: int = Field(ge=20, le=100)
+    restart_from_newest: bool = False
+    confirm_cost: bool = False
+
+    @field_validator("additional_target_count")
+    @classmethod
+    def fixed_target(cls, value: int) -> int:
+        if value not in {20, 50, 100}:
+            raise ValueError("additional_target_count must be 20, 50, or 100")
+        return value
+
+
+class LoadMoreChoiceResponse(APIModel):
+    provider_record_count: int
+    estimated_request_count: int
+    allowed: bool
+
+
+class LoadMoreOptionsResponse(APIModel):
+    cursor_available: bool
+    active_operation_id: str | None = None
+    remaining_effective_budget: int
+    account_snapshot_age_seconds: int | None = None
+    choices: list[LoadMoreChoiceResponse]
 
 
 class ReviewSyncRequest(APIModel):
@@ -60,6 +106,13 @@ class ReviewSyncResponse(APIModel):
     status: str
     collected_unique_count: int
     successful_request_count: int
+    operation_id: UUID | None = None
+    estimated_request_count: int = 0
+    cached_response_count: int = 0
+    failed_request_count: int = 0
+    uncertain_request_count: int = 0
+    released_reserved_count: int = 0
+    remaining_local_budget: int | None = None
     pagination_cursor: str | None = None
     stop_reason: str | None = None
     reviews: list[ReviewResponse]
@@ -74,8 +127,7 @@ REVIEWER_LABEL_OPTIONS = {
     "korean": "Korean",
     "japanese": "Japanese",
     "american": "American",
-    "hispanic": "Hispanic",
-    "indian": "Indian",
+    "italian": "Italian",
 }
 
 FORBIDDEN_FILTER_TERMS = [

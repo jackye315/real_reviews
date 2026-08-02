@@ -6,6 +6,7 @@ from app.models.review_origin import ReviewOrigin
 from app.providers.base import NormalizedReview, NormalizedReviewOrigin
 from app.repositories.reviews import ReviewRepository
 from app.schemas.reviews import ReviewSyncRequest
+from app.utils.review_rich_data import RichSection
 from app.services.reviews import ReviewService, estimate_serpapi_requests
 
 
@@ -72,6 +73,17 @@ def test_material_change_detection_marks_identical_review_unchanged():
     assert repo._has_material_changes(stored_review(), normalized_review(), "8a8f8c") is False
 
 
+def test_rich_detail_changes_are_material_without_changing_review_identity():
+    repo = ReviewRepository(session=None)  # type: ignore[arg-type]
+    review = stored_review()
+    review.details = {"meal_type": "Dinner"}
+    review.origins[0].provider_details = {"meal_type": "Dinner"}
+    item = normalized_review()
+    item.details = RichSection("valid", {"meal_type": "Lunch"})
+    item.origin.details = item.details
+    assert repo._has_rich_changes(review, item) is True
+
+
 def test_material_change_detection_marks_edited_review_changed():
     repo = ReviewRepository(session=None)  # type: ignore[arg-type]
     assert repo._has_material_changes(stored_review(), normalized_review(text="updated pizza"), "different") is True
@@ -81,8 +93,15 @@ async def test_refresh_forces_request_without_duplicate_force_argument(monkeypat
     service = ReviewService(session=None)  # type: ignore[arg-type]
     captured: dict[str, object] = {}
 
-    async def fake_sync(place_id: str, request: ReviewSyncRequest, is_refresh: bool):
-        captured.update(place_id=place_id, request=request, is_refresh=is_refresh)
+    async def fake_sync(
+        place_id: str, request: ReviewSyncRequest, is_refresh: bool, idempotency_key: str | None = None
+    ):
+        captured.update(
+            place_id=place_id,
+            request=request,
+            is_refresh=is_refresh,
+            idempotency_key=idempotency_key,
+        )
         return "refreshed"
 
     monkeypatch.setattr(service, "_sync", fake_sync)

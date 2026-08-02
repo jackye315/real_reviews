@@ -20,6 +20,8 @@ test('landing, results, reviews, filters, and back navigation avoid horizontal o
   const reviewPane = page.locator('section').filter({ hasText: /great outdoor seating/i }).last()
   await expect(reviewPane.getByText(/123 very long address/i)).toBeVisible()
   await expect(reviewPane.getByText(/great outdoor seating/i)).toBeVisible()
+  await expect(reviewPane.getByLabel('Review details')).toBeVisible()
+  await expect(reviewPane.getByLabel('5 out of 5 stars')).toHaveText('5 ★★★★★')
   await expectNoHorizontalOverflow(page)
 
   if (isDesktop) {

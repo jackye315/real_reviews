@@ -1,6 +1,6 @@
-import type { UseQueryResult } from '@tanstack/react-query'
 import type { Dispatch, FormEvent, RefObject, SetStateAction } from 'react'
-import type { PlaceResponse, ProviderUsage, RestaurantSearchResult, Review, ReviewListResponse, ReviewerLabelOption, ReviewSort } from './api'
+import type { ReviewerContext } from './api'
+import type { PlaceResponse, ProviderOperation, ProviderUsage, RestaurantSearchResult, Review, ReviewListResponse, ReviewerLabelOption, ReviewSort } from './api'
 import type { Autocomplete } from '../components/Autocomplete'
 
 export type WorkspaceMode = 'landing' | 'workspace'
@@ -51,8 +51,20 @@ export type WorkspaceProps = {
   onLoadNext: () => void
   onSelectResult: (result: RestaurantSearchResult) => void
   message: string | null
-  reviewsQuery: UseQueryResult<ReviewListResponse>
+  reviewsQuery: { data?: ReviewListResponse; isLoading: boolean }
   visibleReviews: Review[]
+  reviewerRoute: { reviewerId: string; reviewId: string } | null
+  reviewerContext?: ReviewerContext
+  reviewerContextLoading: boolean
+  reviewerContextError: string | null
+  reviewerTimeWindow: 'six_months' | 'one_year' | 'two_years' | 'all_observed'
+  onReviewerTimeWindowChange: (value: 'six_months' | 'one_year' | 'two_years' | 'all_observed') => void
+  onOpenReviewer?: (reviewerId: string, reviewId: string, source: HTMLButtonElement) => void
+  onCloseReviewer: () => void
+  onAnalyzeReviewer: () => void
+  onRefreshReviewer: () => void
+  onDeleteReviewer: () => void
+  reviewPaneRef: RefObject<HTMLElement | null>
   filterText: string
   setFilterText: (value: string) => void
   exactRating: string
@@ -62,11 +74,23 @@ export type WorkspaceProps = {
   reviewerLabel: string
   setReviewerLabel: (value: string) => void
   reviewerLabelOptions: ReviewerLabelOption[]
+  relevanceAvailable: boolean
   syncPending: boolean
   refreshPending: boolean
+  checkNewPending: boolean
   reviewOperationNotice: ReviewOperationNotice | null
+  activeProviderOperation: ProviderOperation | null
   onSync: () => void
   onRefresh: () => void
+  onCheckNew: () => void
+  onCancelProviderOperation: () => void
+  savedHasMore: boolean
+  savedMorePending: boolean
+  onShowMoreSaved: () => void
+  loadMoreChoices: { provider_record_count: 20 | 50 | 100; estimated_request_count: number; allowed: boolean }[]
+  loadMorePending: boolean
+  loadMoreRecovery: ProviderOperation | null
+  onFetchOlder: (target: 20 | 50 | 100, restart?: boolean) => void
   filterPending: boolean
   onFilter: (filterTextOverride?: string) => void
   onResetReviewControls: () => void
@@ -86,6 +110,7 @@ export type ReviewFiltersProps = Pick<
   | 'reviewerLabel'
   | 'setReviewerLabel'
   | 'reviewerLabelOptions'
+  | 'relevanceAvailable'
   | 'filterPending'
   | 'onFilter'
   | 'onResetReviewControls'
@@ -100,6 +125,7 @@ export type ReviewFiltersProps = Pick<
 export type DeveloperDrawerProps = {
   open: boolean
   usage: ProviderUsage[]
+  operations: ProviderOperation[]
   loading: boolean
   onRefresh: () => void
   onClose: () => void

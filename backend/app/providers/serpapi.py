@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
@@ -9,8 +10,14 @@ from app.core.errors import upstream_unconfigured
 from app.providers.base import NormalizedReview, NormalizedReviewOrigin, NormalizedReviewTopic, ReviewPage
 from app.utils.dates import parse_datetime
 from app.utils.review_ids import google_review_id_from_url
+from app.utils.review_rich_data import parse_details, parse_images
 
 SERPAPI_URL = "https://serpapi.com/search.json"
+logger = logging.getLogger(__name__)
+
+
+class ProviderCursorExpiredError(Exception):
+    pass
 
 
 class SerpApiReviewProvider:
@@ -39,6 +46,9 @@ class SerpApiReviewProvider:
             response = await client.get(SERPAPI_URL, params=params)
             response.raise_for_status()
             data = response.json()
+        error = str(data.get("error") or data.get("error_message") or "")
+        if cursor and error and any(value in error.lower() for value in ("token", "cursor", "page")):
+            raise ProviderCursorExpiredError("Provider pagination cursor expired")
         reviews = [
             self._normalize_review(item, place_id)
             for item in data.get("reviews", [])
@@ -114,6 +124,19 @@ class SerpApiReviewProvider:
         author_name = item.get("user_name") or user.get("name")
         author_link = item.get("user_link") or user.get("link")
         author_thumbnail = item.get("thumbnail") or user.get("thumbnail")
+        details = parse_details(item.get("details"), present="details" in item)
+        translated_details = parse_details(
+            item.get("translated_details"), present="translated_details" in item
+        )
+        images = parse_images(item.get("images"), present="images" in item)
+        for section_name, section in (("details", details), ("translated_details", translated_details), ("images", images)):
+            if section.state == "malformed":
+                logger.warning(
+                    "Ignored malformed rich review section: provider=serpapi review_id=%s section=%s reason=%s",
+                    review_id,
+                    section_name,
+                    section.reason,
+                )
         origin = NormalizedReviewOrigin(
             provider_name=self.provider_name,
             provider_review_id=review_id,
@@ -123,8 +146,13 @@ class SerpApiReviewProvider:
             contributor_id=contributor_id,
             author_profile_url=author_link,
             author_avatar_url=author_thumbnail,
+            local_guide=self._optional_bool(user.get("local_guide")),
+            provider_review_count=self._optional_non_negative_int(user.get("reviews")),
+            provider_photo_count=self._optional_non_negative_int(user.get("photos")),
             provider_publication_timestamp=published,
             provider_edit_timestamp=edited,
+            details=details,
+            translated_details=translated_details,
         )
         rating = item.get("rating")
         if isinstance(rating, float):
@@ -140,5 +168,27 @@ class SerpApiReviewProvider:
             canonical_source_url=source_url,
             source_label=item.get("source") or "Google",
             origin=origin,
+            details=details,
+            translated_details=translated_details,
+            images=images,
             raw=item,
         )
+
+    @staticmethod
+    def _optional_bool(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+        return None
+
+    @staticmethod
+    def _optional_non_negative_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", "")
+            return int(cleaned) if cleaned.isdigit() else None
+        return None

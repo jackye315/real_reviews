@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { ProviderOperationsPanel } from './ProviderOperationsPanel'
 import { ProviderUsagePanel } from './ProviderUsagePanel'
 import type { DeveloperDrawerProps } from '../types/ui'
 
@@ -11,7 +12,7 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])'
 ].join(',')
 
-export function DeveloperDrawer({ open, usage, loading, onRefresh, onClose }: DeveloperDrawerProps) {
+export function DeveloperDrawer({ open, usage, operations, loading, onRefresh, onClose }: DeveloperDrawerProps) {
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -53,6 +54,7 @@ export function DeveloperDrawer({ open, usage, loading, onRefresh, onClose }: De
           <button onClick={onRefresh} className="min-h-11 text-sm text-[#35647C] hover:underline">Refresh usage</button>
         </div>
         <ProviderUsagePanel usage={usage} loading={loading} />
+        <ProviderOperationsPanel operations={operations} loading={loading} />
       </aside>
     </div>
   )

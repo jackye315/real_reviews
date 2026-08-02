@@ -2,7 +2,7 @@ type Props = {
   restaurantName: string
   activeFilterCount: number
   onBack: () => void
-  onOpenFilters: () => void
+  onOpenFilters?: () => void
 }
 
 export function MobileRestaurantBar({ restaurantName, activeFilterCount, onBack, onOpenFilters }: Props) {
@@ -18,14 +18,14 @@ export function MobileRestaurantBar({ restaurantName, activeFilterCount, onBack,
       <div className="min-w-0 flex-1 truncate text-center text-base font-semibold text-[#24313A]" aria-label={restaurantName}>
         {restaurantName}
       </div>
-      <button
+      {onOpenFilters && <button
         type="button"
         onClick={onOpenFilters}
         className="min-h-11 shrink-0 rounded-xl bg-[#B7462D] px-3 text-sm font-semibold text-[#FFFDFC]"
         aria-label={activeFilterCount ? `Open filters, ${activeFilterCount} active` : 'Open filters'}
       >
         Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
-      </button>
+      </button>}
     </div>
   )
 }

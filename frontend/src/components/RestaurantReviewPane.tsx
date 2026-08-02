@@ -4,6 +4,7 @@ import { MobileRestaurantBar } from './MobileRestaurantBar'
 import { ReviewFilters } from './ReviewFilters'
 import { ReviewList } from './ReviewList'
 import { ReviewTopicChips } from './ReviewTopicChips'
+import { ReviewerPane } from './ReviewerPane'
 import type { ReviewFiltersProps, WorkspaceProps } from '../types/ui'
 
 export function RestaurantReviewPane({
@@ -13,6 +14,17 @@ export function RestaurantReviewPane({
   onMobileBack,
   reviewsQuery,
   visibleReviews,
+  reviewerRoute,
+  reviewerContext,
+  reviewerContextLoading,
+  reviewerContextError,
+  reviewerTimeWindow,
+  onReviewerTimeWindowChange,
+  onOpenReviewer,
+  onCloseReviewer,
+  onAnalyzeReviewer,
+  onRefreshReviewer,
+  onDeleteReviewer,
   filterText,
   setFilterText,
   exactRating,
@@ -24,9 +36,20 @@ export function RestaurantReviewPane({
   reviewerLabelOptions,
   syncPending,
   refreshPending,
+  checkNewPending,
   reviewOperationNotice,
+  activeProviderOperation,
   onSync,
   onRefresh,
+  onCheckNew,
+  onCancelProviderOperation,
+  savedHasMore,
+  savedMorePending,
+  onShowMoreSaved,
+  loadMoreChoices,
+  loadMorePending,
+  loadMoreRecovery,
+  onFetchOlder,
   filterPending,
   onFilter,
   onResetReviewControls,
@@ -63,6 +86,7 @@ export function RestaurantReviewPane({
     reviewerLabel,
     setReviewerLabel,
     reviewerLabelOptions,
+    relevanceAvailable: Boolean(reviewsQuery.data?.relevance_available),
     filterPending,
     canFilter: hasReviews,
     effectiveTotal,
@@ -83,7 +107,7 @@ export function RestaurantReviewPane({
         restaurantName={selectedPlace.display_name}
         activeFilterCount={activeFilterCount}
         onBack={onMobileBack}
-        onOpenFilters={() => setFiltersOpen(true)}
+        onOpenFilters={reviewerRoute ? undefined : () => setFiltersOpen(true)}
       />
 
       <div className="border-b border-[#DED8CE] bg-[#FFFDFC] px-4 py-4 sm:px-6 lg:sticky lg:top-0 lg:z-10 lg:bg-[#FFFDFC]/95 lg:backdrop-blur">
@@ -106,14 +130,25 @@ export function RestaurantReviewPane({
                 View on Google Maps
               </a>
             )}
+            {hasReviews && <p className="mt-2 text-xs text-[#6B7378]">{reviewsQuery.data?.relevance_available ? `Relevance ${reviewsQuery.data.relevance_status ?? 'saved'} · ${reviewsQuery.data.relevance_ranked_count ?? 0} ranked reviews${reviewsQuery.data.relevance_fetched_at ? ` · ${new Date(reviewsQuery.data.relevance_fetched_at).toLocaleDateString()}` : ''}` : 'Relevance not fetched'}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button disabled={syncPending || refreshPending} onClick={onSync} className="min-h-11 rounded-xl bg-[#B7462D] px-4 py-2 font-semibold text-[#FFFDFC] hover:bg-[#9F3C27] disabled:opacity-50">
-              {syncPending ? 'Fetching…' : reviewsQuery.data?.total ? 'Sync reviews' : 'Fetch reviews'}
+            {!hasReviews && (
+              <button disabled={syncPending || refreshPending} onClick={onSync} className="min-h-11 rounded-xl bg-[#B7462D] px-4 py-2 font-semibold text-[#FFFDFC] hover:bg-[#9F3C27] disabled:opacity-50">
+                {syncPending ? 'Fetching…' : 'Fetch reviews'}
+              </button>
+            )}
+            <button disabled={syncPending || refreshPending || checkNewPending || !(reviewsQuery.data?.total)} onClick={onRefresh} className="min-h-11 rounded-xl border border-[#CFC6BA] px-4 py-2 font-semibold text-[#24313A] hover:border-[#B7462D] disabled:opacity-50">
+              {refreshPending ? 'Refreshing relevance…' : 'Refresh relevance'}
             </button>
-            <button disabled={syncPending || refreshPending || !(reviewsQuery.data?.total)} onClick={onRefresh} className="min-h-11 rounded-xl border border-[#CFC6BA] px-4 py-2 font-semibold text-[#24313A] hover:border-[#B7462D] disabled:opacity-50">
-              {refreshPending ? 'Refreshing…' : 'Refresh'}
-            </button>
+            {hasReviews && <button disabled={syncPending || refreshPending || checkNewPending} onClick={onCheckNew} className="min-h-11 rounded-xl border border-[#CFC6BA] px-4 py-2 font-semibold text-[#24313A] hover:border-[#B7462D] disabled:opacity-50">
+              {checkNewPending ? 'Checking…' : 'Check for new reviews'}
+            </button>}
+            {activeProviderOperation && ['reserved', 'running'].includes(activeProviderOperation.status) && (
+              <button onClick={onCancelProviderOperation} className="min-h-11 rounded-xl border border-[#B7462D] px-4 py-2 font-semibold text-[#B7462D] hover:bg-[#FFF5F2]">
+                {activeProviderOperation.cancel_requested_at ? 'Cancellation requested…' : 'Cancel'}
+              </button>
+            )}
           </div>
         </div>
         {reviewOperationNotice && (
@@ -137,31 +172,40 @@ export function RestaurantReviewPane({
             <span>{reviewOperationNotice.text}</span>
           </div>
         )}
-        {hasReviews && (
+        {hasReviews && !reviewerRoute && (
           <div className="hidden lg:block">
             <ReviewFilters {...filterProps} />
           </div>
         )}
       </div>
 
-      <div className="mx-auto max-w-4xl space-y-5 px-4 py-5 sm:px-6">
-        {hasReviews && <ReviewTopicChips topics={topics} disabled={filterPending} onSelect={selectTopic} />}
-        <ReviewList
-          reviews={visibleReviews}
-          loading={reviewsQuery.isLoading}
-          total={effectiveTotal}
-          filteredTotal={effectiveFilteredTotal}
-          exactRating={exactRating}
+      {reviewerRoute ? (
+        <ReviewerPane
+          context={reviewerContext}
+          loading={reviewerContextLoading}
+          error={reviewerContextError}
+          onBack={onCloseReviewer}
+          timeWindow={reviewerTimeWindow}
+          onTimeWindowChange={onReviewerTimeWindowChange}
+          onAnalyze={onAnalyzeReviewer}
+          onRefresh={onRefreshReviewer}
+          onDelete={onDeleteReviewer}
         />
-      </div>
-
-      {hasReviews && (
-        <MobileFilterSheet
-          {...filterProps}
-          open={filtersOpen}
-          onClose={() => setFiltersOpen(false)}
-        />
-      )}
+      ) : <>
+        <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-4 sm:px-6">
+          {hasReviews && <ReviewTopicChips topics={topics} disabled={filterPending} onSelect={selectTopic} />}
+          <ReviewList reviews={visibleReviews} loading={reviewsQuery.isLoading} total={effectiveTotal} filteredTotal={effectiveFilteredTotal} exactRating={exactRating} onOpenReviewer={onOpenReviewer} />
+          {savedHasMore && <button type="button" onClick={onShowMoreSaved} disabled={savedMorePending} className="min-h-11 rounded-xl border border-[#CFC6BA] px-4 py-2 text-sm font-semibold disabled:opacity-50">{savedMorePending ? 'Loading saved reviews…' : 'Show more saved reviews'}</button>}
+          {hasReviews && loadMoreChoices.length > 0 && (
+            <section aria-label="Fetch more relevant reviews" className="rounded-xl border border-[#DED8CE] bg-[#FFFDFC] p-4">
+              <h2 className="font-semibold">Fetch more relevant reviews</h2>
+              <p className="mt-1 text-sm text-[#6B7378]">Uses SerpApi qualityScore order. Records inspected are not guaranteed new reviews.</p>
+              {loadMoreRecovery ? <button type="button" onClick={() => onFetchOlder(50, true)} disabled={loadMorePending} className="mt-3 min-h-11 rounded-xl bg-[#B7462D] px-3 py-2 text-sm font-semibold text-[#FFFDFC] disabled:opacity-50">Restart relevance from rank 1 (~{loadMoreRecovery.recovery_estimated_request_count ?? 0} requests)</button> : <div className="mt-3 flex flex-wrap gap-2">{loadMoreChoices.map((choice) => <button key={choice.provider_record_count} type="button" disabled={!choice.allowed || loadMorePending} onClick={() => onFetchOlder(choice.provider_record_count)} className="min-h-11 rounded-xl border border-[#CFC6BA] px-3 py-2 text-sm font-semibold disabled:opacity-50">{choice.provider_record_count} records (~{choice.estimated_request_count} request{choice.estimated_request_count === 1 ? '' : 's'})</button>)}</div>}
+            </section>
+          )}
+        </div>
+        {hasReviews && <MobileFilterSheet {...filterProps} open={filtersOpen} onClose={() => setFiltersOpen(false)} />}
+      </>}
     </div>
   )
 }

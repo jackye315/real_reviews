@@ -9,6 +9,7 @@ def expression_text(expressions):
 
 def test_review_sort_allowlist_contains_only_supported_modes():
     assert set(REVIEW_SORTS) == {
+        ReviewSort.RELEVANT,
         ReviewSort.RECENT,
         ReviewSort.OLDEST,
         ReviewSort.RATING_HIGH,

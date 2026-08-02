@@ -8,6 +8,7 @@ export function ProviderUsagePanel({ usage, loading }: { usage: ProviderUsage[];
       <thead className="text-[#6B7378]">
         <tr className="border-b border-[#DED8CE]">
           <th className="py-2 font-medium">Provider</th>
+          <th className="py-2 font-medium">Operation</th>
           <th className="py-2 font-medium">Period</th>
           <th className="py-2 font-medium">Success</th>
           <th className="py-2 font-medium">Failed</th>
@@ -17,6 +18,7 @@ export function ProviderUsagePanel({ usage, loading }: { usage: ProviderUsage[];
         {usage.map((item) => (
           <tr key={item.id} className="border-b border-[#EEE7DD]">
             <td className="py-2">{item.provider}</td>
+            <td className="py-2 text-[#6B7378]">{item.operation_type === 'serpapi_contributor_reviews' ? 'Reviewer history' : 'Restaurant reviews'}</td>
             <td className="py-2 text-[#6B7378]">{item.plan_period}</td>
             <td className="py-2 text-[#4B5A63]">{item.successful_request_count}</td>
             <td className="py-2 text-[#4B5A63]">{item.failed_request_count}</td>

@@ -12,6 +12,8 @@ COPY . .
 CMD ["pnpm", "dev", "--host", "0.0.0.0"]
 
 FROM base AS build
+ARG VITE_REVIEWER_CONTEXT_ENABLED=false
+ENV VITE_REVIEWER_CONTEXT_ENABLED=$VITE_REVIEWER_CONTEXT_ENABLED
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build

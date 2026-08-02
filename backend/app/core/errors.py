@@ -4,8 +4,17 @@ from fastapi import HTTPException, status
 
 
 class AppError(HTTPException):
-    def __init__(self, code: str, message: str, http_status: int = status.HTTP_400_BAD_REQUEST):
-        super().__init__(status_code=http_status, detail={"code": code, "message": message})
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        http_status: int = status.HTTP_400_BAD_REQUEST,
+        extra: dict[str, object] | None = None,
+    ):
+        super().__init__(
+            status_code=http_status,
+            detail={"code": code, "message": message, **(extra or {})},
+        )
 
 
 def upstream_unconfigured(provider: str) -> AppError:

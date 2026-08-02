@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UUIDPrimaryKeyMixin, utcnow
@@ -25,8 +25,14 @@ class ReviewOrigin(UUIDPrimaryKeyMixin, Base):
     contributor_id: Mapped[str | None] = mapped_column(String(500), index=True)
     author_profile_url: Mapped[str | None] = mapped_column(Text)
     author_avatar_url: Mapped[str | None] = mapped_column(Text)
+    local_guide: Mapped[bool | None] = mapped_column()
+    provider_review_count: Mapped[int | None] = mapped_column()
+    provider_photo_count: Mapped[int | None] = mapped_column()
     provider_publication_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_edit_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_details: Mapped[dict | None] = mapped_column(JSONB)
+    provider_translated_details: Mapped[dict | None] = mapped_column(JSONB)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     review = relationship("Review", back_populates="origins")
+    images = relationship("ReviewImage", back_populates="origin", cascade="all, delete-orphan")

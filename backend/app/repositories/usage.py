@@ -21,16 +21,20 @@ class UsageRepository:
         result = await self.session.execute(select(ProviderUsage).order_by(ProviderUsage.provider))
         return list(result.scalars())
 
-    async def get_or_create(self, provider: str, plan_period: str | None = None) -> ProviderUsage:
+    async def get_or_create(
+        self, provider: str, plan_period: str | None = None, operation_type: str = "serpapi_reviews"
+    ) -> ProviderUsage:
         period = plan_period or current_plan_period()
         result = await self.session.execute(
             select(ProviderUsage).where(
-                ProviderUsage.provider == provider, ProviderUsage.plan_period == period
+                ProviderUsage.provider == provider,
+                ProviderUsage.plan_period == period,
+                ProviderUsage.operation_type == operation_type,
             )
         )
         usage = result.scalar_one_or_none()
         if usage is None:
-            usage = ProviderUsage(provider=provider, plan_period=period)
+            usage = ProviderUsage(provider=provider, plan_period=period, operation_type=operation_type)
             self.session.add(usage)
             await self.session.flush()
         return usage
@@ -39,8 +43,15 @@ class UsageRepository:
         usage = await self.get_or_create(provider)
         return max(0, budget - usage.successful_request_count)
 
-    async def increment(self, provider: str, successful: int = 0, cached: int = 0, failed: int = 0) -> ProviderUsage:
-        usage = await self.get_or_create(provider)
+    async def increment(
+        self,
+        provider: str,
+        successful: int = 0,
+        cached: int = 0,
+        failed: int = 0,
+        operation_type: str = "serpapi_reviews",
+    ) -> ProviderUsage:
+        usage = await self.get_or_create(provider, operation_type=operation_type)
         usage.successful_request_count += successful
         usage.cached_response_count += cached
         usage.failed_request_count += failed

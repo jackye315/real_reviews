@@ -19,11 +19,24 @@ export function AppChrome({ mode, developerButtonRef, onDeveloperOpen, onNewSear
         <button
           ref={developerButtonRef}
           onClick={onDeveloperOpen}
-          className="min-h-11 min-w-11 rounded-full p-2 text-lg leading-none text-[#6B7378] hover:bg-[#F1ECE4] hover:text-[#24313A] focus:outline-none focus:ring-2 focus:ring-[#B7462D]"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-2 text-[#6B7378] hover:bg-[#F1ECE4] hover:text-[#24313A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#B7462D]"
           aria-label="Developer"
           title="Developer"
         >
-          ⚙
+          <svg
+            aria-hidden="true"
+            className="h-5 w-5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m8 9-3 3 3 3" />
+            <path d="m16 9 3 3-3 3" />
+            <path d="m14 6-4 12" />
+          </svg>
         </button>
       </div>
     </header>

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from app.utils.review_rich_data import RichSection
+
 from app.schemas.restaurants import RestaurantSearchPage, RestaurantSearchRequest
 
 
@@ -17,8 +19,13 @@ class NormalizedReviewOrigin:
     contributor_id: str | None = None
     author_profile_url: str | None = None
     author_avatar_url: str | None = None
+    local_guide: bool | None = None
+    provider_review_count: int | None = None
+    provider_photo_count: int | None = None
     provider_publication_timestamp: datetime | None = None
     provider_edit_timestamp: datetime | None = None
+    details: RichSection = field(default_factory=lambda: RichSection("omitted"))
+    translated_details: RichSection = field(default_factory=lambda: RichSection("omitted"))
 
 
 @dataclass(slots=True)
@@ -33,6 +40,9 @@ class NormalizedReview:
     canonical_source_url: str | None = None
     source_label: str | None = None
     origin: NormalizedReviewOrigin | None = None
+    details: RichSection = field(default_factory=lambda: RichSection("omitted"))
+    translated_details: RichSection = field(default_factory=lambda: RichSection("omitted"))
+    images: RichSection = field(default_factory=lambda: RichSection("omitted"))
     raw: dict[str, Any] = field(default_factory=dict)
 
 
