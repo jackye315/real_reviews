@@ -2922,7 +2922,7 @@ reviewSummary.reviewsUri,
 reviewSummary.flagContentUri
 ```
 
-The adapter stores the returned text and attribution fields without rewriting them. A valid response without the field becomes a saved `unavailable` outcome.
+The adapter validates and returns the text and attribution fields without rewriting them. A valid response without the field returns `unavailable`; only that non-content outcome code and request accounting are retained in operation history.
 
 SerpApi documents `place_results.user_reviews.summary` as selected review excerpts. That is not the same structured contract as Google's official AI `reviewSummary`, and it lacks the complete official attribution contract. BL-012 therefore uses Google Places as the authoritative source and makes no additional SerpApi place-results request. A SerpApi summary adapter is out of scope until a live fixture demonstrates a stable official-summary object containing every required field.
 
@@ -2963,9 +2963,33 @@ Add `food_recommendation_snapshots` for local output only:
 
 Enforce one active local snapshot per place and normalized language with a partial unique index. Build replacements separately and switch the active snapshot atomically. A failed run is operation history, not an active snapshot.
 
+Add `insight_generation_runs` for durable local background execution:
+
+- UUID, place foreign key, insight kind, and normalized language
+- Analyzed corpus version plus model, prompt, and schema versions
+- Idempotency key and request fingerprint
+- `pending`, `running`, `completed`, `failed`, or `cancelled` status and bounded progress counters
+- Nullable resulting recommendation-snapshot ID and stable bounded error fields
+- Created, started, heartbeat, completed, and cancelled timestamps
+
+Enforce one active local generation per place, kind, and language. Apply the existing LLM concurrency limit and lease/recovery rules, but do not create a provider reservation or provider-usage charge.
+
 The local JSON payload is validated with Pydantic before persistence and again at the API boundary. Review deletion invalidates or removes local snapshots because their evidence no longer exists. Place deletion cascades to local snapshots.
 
-Google content has no snapshot table. Its transient response is validated with a separate Pydantic model. Action links must be HTTPS and match an explicit Google hostname allowlist using exact-host or dot-delimited subdomain matching; a suffix such as `evilgoogle.com` must not pass. Render links with `rel="noopener noreferrer"` and a restrictive referrer policy. Never persist or render provider HTML. Provider-operation persistence contains accounting/status fields only.
+Google content has no snapshot table. Its transient response is validated with a separate Pydantic model:
+
+```json
+{
+  "status": "available",
+  "text": {"text": "People say...", "language_code": "en-US"},
+  "disclosure": {"text": "Summarized with Gemini", "language_code": "en-US"},
+  "reviews_uri": "https://www.google.com/...",
+  "flag_content_uri": "https://www.google.com/...",
+  "operation": {"id": "operation-uuid", "settled_units": 1}
+}
+```
+
+For the initial US/English scope, returned `reviewsUri` and `flagContentUri` must use HTTPS and the exact hostname `www.google.com`. The fixed About link uses `support.google.com`. Reject every other returned hostname rather than applying a loose suffix rule; a suffix such as `evilgoogle.com` must never pass. Render links with `rel="noopener noreferrer"` and `referrerpolicy="no-referrer"`. Never persist or render provider HTML. Provider-operation persistence contains accounting/status fields only.
 
 ### 23.5 Local recommendation input and batching
 
@@ -3010,7 +3034,7 @@ The local cache key is:
 
 A matching completed snapshot returns without an LLM call. A change to canonical review text, rating, rich dish details, review membership, or relevance/order data that already increments `review_corpus_version` makes the local result stale. Generating insights does not increment the corpus version.
 
-Stale output may remain visible with `Based on an earlier saved review set`, its timestamp, and an explicit `Regenerate` action. Never regenerate automatically. If the corpus changes during generation, the result cannot be published as current; preserve it against the analyzed version as stale or discard it while retaining the previous valid current snapshot.
+Stale output may remain visible with `Based on an earlier saved review set`, its timestamp, and an explicit `Regenerate` action. Never regenerate automatically. At commit time, activate the generated snapshot only when the restaurant's current corpus version still equals the run's analyzed version. If it changed, retain the completed run/version for diagnostics without activating its output and preserve the previous snapshot; when none exists, show no result and offer regeneration.
 
 An unavailable LLM does not affect database reads or a volatile Google result already displayed in the current view. Generation failure, cancellation, invalid JSON, validation rejection, or timeout never replaces the last valid local snapshot.
 
@@ -3028,7 +3052,7 @@ The Google mutation accepts confirmation and idempotency inputs, reserves one Go
 
 The local mutation returns `202` with a persisted local insight-operation ID, uses `LLM_MAX_CONCURRENCY`, and reserves no provider budget. Local operation polling survives reload. Do not misclassify local generation as a SerpApi/Google provider operation merely to reuse UI code.
 
-Stable errors include `FEATURE_DISABLED`, `NO_SAVED_REVIEWS`, `GOOGLE_REVIEW_SUMMARY_UNAVAILABLE`, `INVALID_PROVIDER_ATTRIBUTION`, `LLM_UNAVAILABLE`, `INVALID_MODEL_OUTPUT`, `STALE_CORPUS_DURING_GENERATION`, and `OPERATION_CONFLICT`.
+The successful Google response has `status=available` or `status=unavailable`; `GOOGLE_REVIEW_SUMMARY_UNAVAILABLE` is a stable non-error outcome code. Stable errors include `FEATURE_DISABLED`, `NO_SAVED_REVIEWS`, `INVALID_PROVIDER_ATTRIBUTION`, `LLM_UNAVAILABLE`, `INVALID_MODEL_OUTPUT`, `STALE_CORPUS_DURING_GENERATION`, and `OPERATION_CONFLICT`.
 
 ### 23.9 Presentation and attribution
 
@@ -3037,7 +3061,7 @@ Place a compact `Restaurant insights` region above review topics and controls. D
 1. `Review summary`
 2. `What reviewers recommend`
 
-Google presentation must use the heading exactly `Review summary` and include the complete returned text, unchanged localized disclosure immediately beneath it, `About this summary`, `Report summary`, `See reviews`, and visible Google Maps attribution in the same clearly distinguished container. `About this summary` uses Google's required fixed support link; report and reviews actions use the returned URIs. Provider prose is not truncated, summarized, or combined with local prose.
+Google presentation must use the heading exactly `Review summary` and include the complete returned text, unchanged localized disclosure immediately beneath it, `About this summary`, `Report summary`, `See reviews`, and visible Google Maps attribution in the same clearly distinguished container. `About this summary` uses Google's required fixed link, `https://support.google.com/local-listings/answer/9851099`; report and reviews actions use the returned URIs. Provider prose is not truncated, summarized, or combined with local prose. Use the official Google Maps logo or the exact text `Google Maps` with Google's required styling and `translate="no"`; do not make a homemade logo.
 
 Keep this content only in volatile application/component memory for the mounted restaurant view. Never put it in PostgreSQL, provider-operation result JSON, logs, `localStorage`, `sessionStorage`, IndexedDB, persisted query caches, analytics/error-reporting payloads, or a service-worker cache.
 
@@ -3051,6 +3075,8 @@ When evidence is weak or absent, the UI uses neutral language and abstains. It m
 - Logs include request/operation IDs, counts, durations, model/prompt/schema versions, truncation counts, and stable error codes.
 - Local recommendations are informational observations from saved public reviews, not medical, allergy, nutritional, or professional advice.
 - Existing feature gates gain separate controls for Google summary acquisition and local recommendation generation so private deployments can enable either independently.
+- `GOOGLE_REVIEW_SUMMARY_ENABLED` and `FOOD_RECOMMENDATIONS_ENABLED` default off in production until provider-term and attribution review is complete; development/test may enable them explicitly.
+- Local recommendations may use only review sources the deployment is contractually permitted to store and transform. Official Places API summary/review content is excluded from local LLM input.
 - Saved local results remain readable when generation is disabled, unless the deployment explicitly configures a stricter privacy mode. Google summaries are never saved.
 
 ### 23.11 Verification
@@ -3079,6 +3105,7 @@ Tests must cover:
 - [Google Places review schema](https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places)
 - [Google Places policies and attribution](https://developers.google.com/maps/documentation/places/web-service/policies)
 - [Google Maps Platform Terms](https://cloud.google.com/maps-platform/terms)
+- [Google Maps Platform Service Specific Terms](https://cloud.google.com/maps-platform/terms/maps-service-terms)
 - [SerpApi Google Maps Reviews API](https://serpapi.com/google-maps-reviews-api)
 - [SerpApi Google Maps Place Results API](https://serpapi.com/maps-place-results)
 - [SerpApi Google Maps Contributor Reviews API](https://serpapi.com/google-maps-contributor-reviews-api)

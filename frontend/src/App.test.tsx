@@ -145,7 +145,8 @@ beforeEach(() => {
       { value: 'korean', label: 'Korean' },
       { value: 'japanese', label: 'Japanese' },
       { value: 'american', label: 'American' },
-      { value: 'italian', label: 'Italian' }
+      { value: 'italian', label: 'Italian' },
+      { value: 'jack', label: 'Jack' }
     ]
   })
   vi.mocked(api.filterReviews).mockResolvedValue({

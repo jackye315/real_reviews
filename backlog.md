@@ -1845,7 +1845,7 @@ The UI and API must never merge, relabel, or visually imply that the local recom
 ### Cost and acquisition behavior
 
 - Never fetch the Google summary during autocomplete, free-text search, restaurant selection, review-list loading, or ordinary review refresh.
-- Show an explicit `Fetch Google review summary` action when no saved summary exists. Before the request, disclose that it is one potentially billable Google Place Details Enterprise + Atmosphere request.
+- Show an explicit `Fetch Google review summary` action when no volatile summary is currently displayed. Before the request, disclose that it is one potentially billable Google Place Details Enterprise + Atmosphere request.
 - Run the request through the existing confirmed, idempotent, persisted operation pattern with `provider=google_places` and `operation_type=google_review_summary`. Do not charge it against the SerpApi allowance.
 - Return a successful summary directly to the requesting client for transient in-memory display. Sorting reviews or paging within the still-mounted restaurant view does not refetch it, but a page reload, place switch, or later session requires another explicit action.
 - Treat a valid response with no `reviewSummary` as an `unavailable` result for that request, not a provider failure and not a reason to fabricate a summary. Persist only non-content operation metadata such as status, request count, timestamp, and stable outcome code.
@@ -1865,7 +1865,9 @@ Persist only local output in `food_recommendation_snapshots`; do not put Google 
 
 Allow only one active local snapshot per place and language. Replacement is atomic. Deleting a place cascades to its recommendation snapshots. Deleting saved reviews deletes or invalidates local snapshots because their evidence no longer exists.
 
-The Google proxy response uses a typed in-memory response model whose text, disclosure, and action URIs remain separate fields. Do not embed upstream HTML. Accept only HTTPS action URLs on the documented Google host allowlist and render links with a restrictive referrer policy. The persisted Google provider-operation row contains accounting and stable outcome metadata only, never response content.
+The Google proxy response uses a typed in-memory response model whose localized text, localized disclosure, and action URIs remain separate fields. For the initial US/English scope, accept returned `reviewsUri` and `flagContentUri` only when they are HTTPS and the exact hostname is `www.google.com`; the fixed About link uses `support.google.com`. Reject all other hosts rather than applying a loose suffix rule. Do not embed upstream HTML. Render links with a restrictive referrer policy. The persisted Google provider-operation row contains accounting and stable outcome metadata only, never response content.
+
+Add `insight_generation_runs` for durable local background work. Store place, kind, language, analyzed corpus version, model/prompt/schema versions, status/progress, idempotency key, resulting snapshot ID, bounded error metadata, and lifecycle timestamps. Enforce one active local generation per place/kind/language. This table uses the LLM concurrency limit but is not a provider reservation or provider-usage record.
 
 ### Local recommendation pipeline
 
@@ -1909,7 +1911,7 @@ Limit output to eight recommendations, a 500-character reason per item, and thre
 - Any corpus-version change marks the active local result stale. Continue showing it with its generation timestamp and `Based on an earlier saved review set` label until the user explicitly regenerates it.
 - Do not automatically regenerate after relevance refresh, newest-first reconciliation, rich-data changes, or load-more.
 - Generating a recommendation snapshot does not itself change `review_corpus_version`.
-- If the local LLM is offline, saved Google and local snapshots remain readable. A new local generation fails without replacing the last valid local snapshot.
+- If the local LLM is offline, saved local snapshots and any volatile Google result already displayed remain readable. A new local generation fails without replacing the last valid local snapshot.
 
 ### API contract
 
@@ -1917,9 +1919,9 @@ Limit output to eight recommendations, a 500-character reason per item, and thre
 - `POST /api/v1/restaurants/{place_id}/insights/google-review-summary` performs one confirmed synchronous Google request and returns `200` with the transient typed summary or unavailable result plus operation/accounting metadata. The persisted operation row excludes all Places response content.
 - `POST /api/v1/restaurants/{place_id}/insights/food-recommendations` starts a persisted local background generation and returns `202` with a local insight operation ID. It uses LLM concurrency controls but no provider-budget reservation.
 - Local operation polling survives page reload. Google idempotency prevents duplicate billing while a request is active, but completed summary content is not replayed from storage; a later user-approved fetch uses a new key.
-- Stable errors distinguish feature disabled, no saved reviews, Google summary unavailable, invalid provider attribution fields, LLM unavailable, invalid model output, stale corpus during generation, and operation conflict.
+- The successful Google response uses `available` or `unavailable`; `GOOGLE_REVIEW_SUMMARY_UNAVAILABLE` is a stable non-error outcome code. Stable errors distinguish feature disabled, no saved reviews, invalid provider attribution fields, LLM unavailable, invalid model output, stale corpus during generation, and operation conflict.
 
-If the corpus changes while local generation is running, do not publish the result as current. Either discard it or persist it as stale against the version it actually analyzed while retaining the prior active current snapshot.
+If the corpus changes while local generation is running, tie any completed run to the version it actually analyzed but do not activate its output. Retain the prior snapshot; if none exists, show no generated result and offer regeneration against the current corpus.
 
 ### Frontend behavior
 
@@ -1937,8 +1939,9 @@ If the corpus changes while local generation is running, do not publish the resu
 - Send only the canonical review ID, review text needed for the batch, rating, structured dish details, and normalized publication time to the local LLM. Do not send reviewer profile history, avatar, location, or inferred demographic data.
 - Do not log raw reviews, generated prompts, model output, Google summary prose, or action URLs. Log operation IDs, counts, durations, versions, and stable error codes.
 - Local recommendations are observations from saved public reviews, not professional, allergy, health, or dietary advice. Menu items, ingredients, price, and availability may change.
-- Preserve Google's attribution and review-summary display rules exactly; local text must not use Google's disclosure, logo treatment, or visual attribution.
+- Preserve Google's attribution and review-summary display rules exactly; `About this summary` links to `https://support.google.com/local-listings/answer/9851099`, while local text must not use Google's disclosure, logo treatment, or visual attribution.
 - Keep the official summary only in volatile component/application memory for the current view. Do not place it in `localStorage`, `sessionStorage`, IndexedDB, a query-cache persistence layer, a service-worker cache, analytics, error reporting, or server persistence.
+- Generate local recommendations only from review sources the deployment is permitted to store and transform. Official Places API summary/review content is excluded from local model input. Keep separate `GOOGLE_REVIEW_SUMMARY_ENABLED` and `FOOD_RECOMMENDATIONS_ENABLED` gates; default both off in production until provider-term and attribution review is complete.
 
 ### Acceptance criteria
 
