@@ -636,6 +636,10 @@ backend/
 
 The private Oracle/Tailscale rollout is intentionally deferred and tracked as [`BL-010`](backlog.md#bl-010--private-oracle-and-tailscale-deployment). Section 21 is authoritative for its network and operational design.
 
+Development access through a raw Tailscale IP may temporarily use plain HTTP. Browsers do not treat `http://100.x.y.z` as a secure context (unlike the special `http://localhost` exception), so secure-context-only browser APIs must not be assumed on that path. In particular, review actions require a client-generated idempotency key: the frontend uses `crypto.randomUUID()` when available and falls back to an RFC 4122 UUID v4 generated with `crypto.getRandomValues()` when `randomUUID` is unavailable. This fallback fixed an Oracle/Tailscale failure where clicking `Fetch reviews` raised `crypto.randomUUID is not a function` before the confirmation dialog or API request could occur.
+
+The public deployment should use HTTPS and will naturally return to the native `crypto.randomUUID()` path. The API must also be HTTPS or be exposed through the frontend's same-origin reverse proxy; an HTTPS page must not call the development HTTP API because browsers will block it as mixed content. Set `FRONTEND_ORIGIN` to the final HTTPS origin so CORS remains exact.
+
 The frontend and backend Dockerfiles will use multi-stage development and production targets. Production images will contain only runtime dependencies and built application artifacts.
 
 Validate every merged configuration with:
@@ -1725,6 +1729,13 @@ After the July 28, 2026 source-level audit, the following corrective changes wer
 - Added migration `0009_relevance_snapshots` with snapshot-scoped provider relevance ranks and separate `qualityScore`/`newestFirst` collection state.
 - Primary SerpApi collection now uses validated `qualityScore`; its ordinal provider order is retained as relevance rank rather than an invented score.
 - Added PostgreSQL-only Google-most-relevant sorting, relevance availability metadata, historical most-recent fallback, explicit relevance refresh/continuation labels, and a separate newest-first `Check for new reviews` operation that does not change ranks or topics.
+
+#### 16.9.17 HTTP private-network UUID compatibility
+
+- Reproduced the Oracle/Tailscale review-fetch failure in Chromium against the live plain-HTTP Tailscale IP. Restaurant search and selection succeeded, but `Fetch reviews` stopped client-side with `crypto.randomUUID is not a function`, so no sync request or cost-confirmation dialog was created.
+- Updated the frontend idempotency-key generator to prefer native `crypto.randomUUID()` in secure contexts and generate an RFC 4122 UUID v4 with `crypto.getRandomValues()` when running on a non-secure private-network HTTP origin.
+- Added unit coverage for the native and fallback paths and verified the live Chromium flow through the cost-confirmation dialog without approving or consuming a SerpApi search.
+- This compatibility path is transitional. The public website remains expected to use HTTPS with an HTTPS or same-origin-proxied API and an exact HTTPS `FRONTEND_ORIGIN`.
 
 ### 16.10 Remaining known work
 

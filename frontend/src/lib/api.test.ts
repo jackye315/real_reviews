@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadMoreReviews, streamDishSummary } from './api'
+import { loadMoreReviews, newIdempotencyKey, streamDishSummary } from './api'
 
 describe('API requests', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -24,6 +24,23 @@ describe('API requests', () => {
     }))
 
     await expect(loadMoreReviews('place-1', 20, false, false, 'key-1')).rejects.toThrow('Input should be a valid dictionary')
+  })
+
+  it('uses crypto.randomUUID when the page has a secure context', () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'secure-context-uuid') })
+
+    expect(newIdempotencyKey()).toBe('secure-context-uuid')
+  })
+
+  it('generates a UUID v4 when randomUUID is unavailable on an HTTP origin', () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        return bytes
+      }
+    })
+
+    expect(newIdempotencyKey()).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f')
   })
 
   it('decodes streamed dish-summary deltas and returns the committed paragraph', async () => {

@@ -1,5 +1,7 @@
-COMPOSE_DEV := docker compose -f docker/compose.yaml -f docker/compose.override.yaml
-COMPOSE_PROD := docker compose -f docker/compose.yaml -f docker/compose.prod.yaml
+# Compose resolves interpolation relative to the first compose file (docker/), so
+# explicitly load the repository-root .env for both interpolation and env_file.
+COMPOSE_DEV := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.override.yaml
+COMPOSE_PROD := docker compose --env-file .env -f docker/compose.yaml -f docker/compose.prod.yaml
 
 .PHONY: help up up-detached down down-volumes restart ps logs build config prod-config migrate api-lint api-test frontend-lint frontend-test frontend-e2e test frontend-build clean-images
 
