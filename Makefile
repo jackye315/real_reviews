@@ -25,9 +25,6 @@ help:
 	@echo "  make prod-config     Validate prod Compose config"
 
 up:
-	$(COMPOSE_DEV) up --build
-
-up-detached:
 	$(COMPOSE_DEV) up --build -d
 
 down:
