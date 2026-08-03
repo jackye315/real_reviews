@@ -37,13 +37,15 @@ describe('RestaurantInsights', () => {
     expect(screen.queryByText('Older summary.')).not.toBeInTheDocument()
   })
 
-  it('does not include unloaded reviews and asks the user to show more first', () => {
+  it('uses every currently displayed review when the requested count is larger', async () => {
+    vi.mocked(api.streamDishSummary).mockResolvedValue({ summary: 'Summary from one review.' })
     render(<RestaurantInsights placeId="place-1" visibleReviews={[review('1', 'first')]} />)
-    fireEvent.change(screen.getByLabelText(/reviews to include/i), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText(/reviews to include/i), { target: { value: '50' } })
     fireEvent.click(screen.getByRole('button', { name: /generate summary/i }))
 
-    expect(api.streamDishSummary).not.toHaveBeenCalled()
-    expect(screen.getByText(/only 1 loaded review/i)).toBeInTheDocument()
+    await waitFor(() => expect(api.streamDishSummary).toHaveBeenCalledWith('place-1', ['first'], expect.any(Function)))
+    expect(await screen.findByText('Summary from one review.')).toBeInTheDocument()
+    expect(screen.queryByText(/only 1 loaded review/i)).not.toBeInTheDocument()
   })
 
   it('restores the previous paragraph when a stream fails after provisional text', async () => {

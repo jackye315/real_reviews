@@ -2998,7 +2998,7 @@ For the initial US/English scope, returned `reviewsUri` and `flagContentUri` mus
 
 ### 23.5 Local review selection and request bounds
 
-The review-count control defaults to `10`. The user may enter a larger number up to `LOCAL_DISH_SUMMARY_MAX_REVIEWS`, initially `50`, but the client never sends more reviews than are currently displayed. Apply active deterministic and semantic filters first, preserve the current sort order, and take the first requested number from the visible list.
+The review-count control defaults to `10`. The user may enter a larger number up to `LOCAL_DISH_SUMMARY_MAX_REVIEWS`, initially `50`, but the client never sends more reviews than are currently displayed. Treat the requested count as a maximum: when fewer reviews are displayed, submit all displayed reviews instead of failing or requiring the user to lower the count. Apply active deterministic and semantic filters first, preserve the current sort order, and take the first requested number from the visible list.
 
 If the user requests more reviews than are displayed, the UI reports how many are available and asks the user to show more saved reviews. It does not silently query or include unseen database rows.
 

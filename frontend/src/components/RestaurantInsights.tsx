@@ -25,11 +25,7 @@ export function RestaurantInsights({ placeId, initialDishSummary, visibleReviews
   }, [placeId, initialDishSummary])
 
   const generate = async () => {
-    if (requestedCount > visibleReviews.length) {
-      setDishError(`Only ${visibleReviews.length} loaded review${visibleReviews.length === 1 ? '' : 's'} are available. Show more saved reviews first.`)
-      return
-    }
-    const texts = visibleReviews.slice(0, requestedCount)
+    const texts = visibleReviews.slice(0, Math.min(requestedCount, visibleReviews.length))
       .map((review) => review.text || review.original_text || '')
     const previousSummary = dishSummary
     let streamedText = ''
@@ -53,7 +49,7 @@ export function RestaurantInsights({ placeId, initialDishSummary, visibleReviews
     <section className="space-y-3" aria-label="Restaurant insights">
       <section className="rounded-xl border border-[#DED8CE] bg-[#FFFDFC] p-4" aria-labelledby="local-dish-summary-heading">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
-          <h2 id="local-dish-summary-heading" className="shrink-0 font-semibold">Local dish summary</h2>
+          <h2 id="local-dish-summary-heading" className="shrink-0 font-semibold">LLM Summary</h2>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <label className="flex items-center gap-2 text-sm font-medium">
               Reviews to include
