@@ -32,6 +32,7 @@ class PlaceResponse(APIModel):
     viewport: dict[str, Any] | None = None
     place_types: list[str] | None = None
     google_maps_url: str | None = None
+    llm_dish_summary: str | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import StreamingResponse
+from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.schemas.common import PlaceResponse
 from app.schemas.restaurants import (
     PlaceSelectionRequest,
+    DishSummaryRequest,
+    DishSummaryResponse,
+    GoogleReviewSummaryRequest,
+    GoogleReviewSummaryResponse,
     RestaurantDetailResponse,
     RestaurantSearchPage,
     RestaurantSearchRequest,
 )
+from app.services.insights import RestaurantInsightService
 from app.services.restaurants import RestaurantService
 
 router = APIRouter()
@@ -50,6 +57,45 @@ async def search_restaurants_post(
 ):
     # Frontend uses POST so browser coordinates are not written into access-log URLs.
     return await RestaurantService(session).search(request)
+
+
+@router.post("/{place_id}/dish-summary", response_model=DishSummaryResponse)
+async def generate_dish_summary(
+    place_id: str,
+    body: Request,
+    request: DishSummaryRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    return await RestaurantInsightService(session).generate_dish_summary(place_id, request, len(await body.body()))
+
+
+@router.post("/{place_id}/dish-summary/stream")
+async def stream_dish_summary(
+    place_id: str,
+    body: Request,
+    request: DishSummaryRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    events = await RestaurantInsightService(session).prepare_dish_summary_stream(
+        place_id, request, len(await body.body())
+    )
+    return StreamingResponse(
+        events,
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{place_id}/insights/google-review-summary", response_model=GoogleReviewSummaryResponse)
+async def google_review_summary(
+    place_id: str,
+    request: GoogleReviewSummaryRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    return await RestaurantInsightService(session).fetch_google_review_summary(
+        place_id, request.confirm_cost, idempotency_key
+    )
 
 
 @router.get("/{place_id}", response_model=RestaurantDetailResponse)

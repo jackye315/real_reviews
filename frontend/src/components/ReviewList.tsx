@@ -28,9 +28,9 @@ export function ReviewList({
   if (!filteredTotal) return <p className="text-[#6B7378]">No stored reviews match {exactRating ? `${exactRating} stars` : 'the current filters'}.</p>
   if (!reviews.length) return <p className="text-[#6B7378]">No reviews match the active content filter.</p>
   return (
-    <div className="grid gap-3">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
       {reviews.map((review) => (
-        <article key={review.id} className="rounded-2xl border border-[#DED8CE] bg-[#FFFDFC] p-3.5">
+        <article key={review.id} className="min-w-0 rounded-2xl border border-[#DED8CE] bg-[#FFFDFC] p-3.5">
           <div className="flex flex-wrap items-center gap-2 break-words text-sm text-[#6B7378]">
             <OverallRating rating={review.rating} />
             {review.publication_timestamp && <span>{new Date(review.publication_timestamp).toLocaleDateString()}</span>}

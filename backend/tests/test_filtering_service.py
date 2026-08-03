@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -64,7 +65,7 @@ async def test_content_filter_payload_excludes_reviewer_label(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_unknown_id_is_rejected(monkeypatch):
+async def test_llm_unknown_id_is_rejected(monkeypatch, caplog):
     service = ReviewFilterService()
     review = make_review()
     unknown = uuid4()
@@ -74,7 +75,10 @@ async def test_llm_unknown_id_is_rejected(monkeypatch):
 
     monkeypatch.setattr(service, "_chat_completion", fake_chat)
 
-    with pytest.raises(AppError) as exc:
-        await service._name_batch("Jack", [review])
+    with caplog.at_level(logging.WARNING, logger="app.services.filtering"):
+        with pytest.raises(AppError) as exc:
+            await service._name_batch("Jack", [review])
 
     assert exc.value.detail["code"] == "LLM_UNKNOWN_REVIEW_ID"
+    assert str(unknown) in caplog.text
+    assert str(review.id) in caplog.text

@@ -20,6 +20,7 @@ class Place(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     viewport: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     place_types: Mapped[list[str] | None] = mapped_column(JSONB)
     google_maps_url: Mapped[str | None] = mapped_column(Text)
+    llm_dish_summary: Mapped[str | None] = mapped_column(Text)
     review_corpus_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     state: Mapped[str] = mapped_column(String(20), default="selected", nullable=False)
     provider_type: Mapped[str | None] = mapped_column(String(200))

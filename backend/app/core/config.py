@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     review_cursor_signing_key: str = "development-review-cursor-signing-key"
     reviewer_context_enabled: bool = True
     reviewer_context_stale_after_days: int = Field(default=30, ge=1, le=3650)
+    google_review_summary_enabled: bool = False
+    google_review_summary_monthly_request_budget: int = Field(default=25, ge=0, le=100000)
+    google_review_summary_max_concurrency: int = Field(default=1, ge=1, le=20)
+    google_review_summary_language_code: str = "en"
+    google_review_summary_region_code: str = "US"
 
     review_provider: str = "serpapi"
     review_fallback_provider: str = "google_places"
@@ -42,6 +47,15 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = Field(default=2, ge=1, le=20)
     llm_batch_max_chars: int = Field(default=18000, ge=1000, le=100000)
     llm_name_batch_max_candidates: int = Field(default=100, ge=1, le=1000)
+    # Development-only diagnostics. Logs review UUIDs and LLM-selected UUIDs, never names or review text.
+    llm_filter_debug_logging: bool = False
+    local_dish_summary_enabled: bool = False
+    local_dish_summary_max_reviews: int = Field(default=50, ge=1, le=50)
+    local_dish_summary_max_review_chars: int = Field(default=4000, ge=1, le=20000)
+    local_dish_summary_max_total_chars: int = Field(default=20000, ge=1, le=100000)
+    local_dish_summary_max_request_bytes: int = Field(default=131072, ge=1024, le=1048576)
+    local_dish_summary_max_output_chars: int = Field(default=800, ge=1, le=10000)
+    local_dish_summary_log_content: bool = False
 
     http_timeout_seconds: int = Field(default=20, ge=1, le=120)
 

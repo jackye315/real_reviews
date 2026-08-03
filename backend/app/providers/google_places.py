@@ -67,6 +67,24 @@ class GooglePlacesRestaurantProvider:
             )
         return RestaurantSearchPage(results=results, next_page_token=data.get("nextPageToken"))
 
+    async def get_review_summary(self, place_id: str) -> dict[str, Any]:
+        """Fetch only Google's transient official review-summary fields."""
+        if not self.api_key:
+            raise upstream_unconfigured("google")
+        resource = place_id if place_id.startswith("places/") else f"places/{place_id}"
+        headers = {
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": "id,reviewSummary.text,reviewSummary.disclosureText,reviewSummary.reviewsUri,reviewSummary.flagContentUri",
+        }
+        params = {
+            "languageCode": settings.google_review_summary_language_code,
+            "regionCode": settings.google_review_summary_region_code,
+        }
+        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+            response = await client.get(f"{GOOGLE_PLACES_BASE}/{resource}", headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()
+
     async def get_place(self, place_id: str) -> RestaurantSearchResult:
         if not self.api_key:
             raise upstream_unconfigured("google")

@@ -8,6 +8,7 @@ export type PlaceResponse = {
   viewport?: Record<string, unknown> | null
   place_types?: string[] | null
   google_maps_url?: string | null
+  llm_dish_summary?: string | null
   created_at: string
   updated_at: string
 }
@@ -35,6 +36,17 @@ export type RestaurantDetailResponse = {
   place: PlaceResponse
   stored_review_count: number
   last_fetch_time?: string | null
+}
+
+export type DishSummaryResponse = { summary: string }
+
+export type GoogleReviewSummary = {
+  status: 'available' | 'unavailable'
+  text?: { text: string; language_code?: string | null } | null
+  disclosure?: { text: string; language_code?: string | null } | null
+  reviews_uri?: string | null
+  flag_content_uri?: string | null
+  operation: { id: string; settled_units: number }
 }
 
 export type ReviewDetailValue = string | number | boolean | Array<string | number | boolean>

@@ -1,4 +1,6 @@
 import type {
+  DishSummaryResponse,
+  GoogleReviewSummary,
   LoadMoreOptions,
   PlaceResponse,
   ProviderOperation,
@@ -79,6 +81,73 @@ export async function persistSearchResult(result: RestaurantSearchResult): Promi
 
 export async function getRestaurantDetail(placeId: string): Promise<RestaurantDetailResponse> {
   return requestJson<RestaurantDetailResponse>(`/restaurants/${encodeURIComponent(placeId)}`)
+}
+
+export async function generateDishSummary(placeId: string, reviewTexts: string[]): Promise<DishSummaryResponse> {
+  return requestJson<DishSummaryResponse>(`/restaurants/${encodeURIComponent(placeId)}/dish-summary`, {
+    method: 'POST', body: JSON.stringify({ review_texts: reviewTexts })
+  })
+}
+
+export async function streamDishSummary(
+  placeId: string,
+  reviewTexts: string[],
+  onDelta: (text: string) => void
+): Promise<DishSummaryResponse> {
+  const response = await fetch(`${API_BASE}/restaurants/${encodeURIComponent(placeId)}/dish-summary/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ review_texts: reviewTexts })
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const detail = payload?.detail
+    const message = detail?.message ?? (Array.isArray(detail) ? detail[0]?.msg : detail) ?? response.statusText
+    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+  }
+  if (!response.body) throw new Error('The local LLM stream is unavailable. Try again later.')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let completedSummary: string | null = null
+
+  const processLine = (line: string) => {
+    if (!line.trim()) return
+    let event: { type?: string; text?: string; summary?: string; message?: string }
+    try {
+      event = JSON.parse(line)
+    } catch {
+      throw new Error('The local LLM returned an invalid stream.')
+    }
+    if (event.type === 'delta' && typeof event.text === 'string') onDelta(event.text)
+    else if (event.type === 'done' && typeof event.summary === 'string') completedSummary = event.summary
+    else if (event.type === 'error') throw new Error(event.message ?? 'The local LLM isn’t available. Try again later.')
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) processLine(line)
+    }
+    buffer += decoder.decode()
+    processLine(buffer)
+  } catch (error) {
+    await reader.cancel().catch(() => undefined)
+    throw error
+  }
+  if (completedSummary === null) throw new Error('The local LLM stream ended before completion.')
+  return { summary: completedSummary }
+}
+
+export async function fetchGoogleReviewSummary(placeId: string, confirm: boolean, key: string): Promise<GoogleReviewSummary> {
+  return requestJson<GoogleReviewSummary>(`/restaurants/${encodeURIComponent(placeId)}/insights/google-review-summary`, {
+    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ confirm_cost: confirm })
+  })
 }
 
 export async function getReviews(

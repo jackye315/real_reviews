@@ -34,12 +34,17 @@ class ProviderOperationRepository:
         requested_units: int,
         snapshot: SerpApiAccountSnapshot | None,
         reviewer_id: UUID | None = None,
+        local_budget: int | None = None,
+        enforce_hourly_limit: bool = True,
+        place_conflict_code: str = "SYNC_ALREADY_RUNNING",
+        place_conflict_message: str = "A review operation is already running for this restaurant.",
     ) -> tuple[ProviderOperation, bool]:
         """Create an atomic reservation or return an idempotent replay.
 
         The caller must make no paid provider request before this method returns.
         """
         plan_period = _plan_period(snapshot)
+        budget = local_budget if local_budget is not None else _configured_budget(provider)
         now = datetime.now(timezone.utc)
         await self.session.rollback()
         async with self.session.begin():
@@ -48,7 +53,7 @@ class ProviderOperationRepository:
                 .values(
                     provider=provider,
                     plan_period=plan_period,
-                    configured_local_budget=settings.serpapi_monthly_request_budget,
+                    configured_local_budget=budget,
                 )
                 .on_conflict_do_nothing(index_elements=["provider", "plan_period"])
             )
@@ -62,8 +67,8 @@ class ProviderOperationRepository:
                     .with_for_update()
                 )
             ).scalar_one()
+            period.configured_local_budget = budget
             if snapshot is not None:
-                period.configured_local_budget = settings.serpapi_monthly_request_budget
                 period.provider_reported_remaining = snapshot.total_searches_left
                 period.provider_hourly_used = snapshot.this_hour_searches
                 period.provider_hourly_limit = snapshot.account_rate_limit_per_hour
@@ -131,13 +136,13 @@ class ProviderOperationRepository:
                 await self._expire_if_needed(operation, now)
                 if operation.status in ACTIVE_STATUSES:
                     raise AppError(
-                        "SYNC_ALREADY_RUNNING",
-                        "A review operation is already running for this restaurant.",
+                        place_conflict_code,
+                        place_conflict_message,
                         409,
                         {"operation_id": str(operation.id), "status": operation.status},
                     )
 
-            await self._assert_capacity(period, requested_units, now)
+            await self._assert_capacity(period, requested_units, now, enforce_hourly_limit=enforce_hourly_limit)
             operation = ProviderOperation(
                 provider=provider,
                 plan_period=plan_period,
@@ -267,7 +272,7 @@ class ProviderOperationRepository:
     async def remaining_for_provider(self, provider: str) -> int:
         period = _plan_period(None)
         settled, active = await self._local_usage(provider, period)
-        return max(0, settings.serpapi_monthly_request_budget - settled - active)
+        return max(0, _configured_budget(provider) - settled - active)
 
     async def active_for_place(self, provider: str, place_id: UUID) -> ProviderOperation | None:
         return (await self.session.execute(
@@ -293,7 +298,7 @@ class ProviderOperationRepository:
         return max(0, period.configured_local_budget - settled - active)
 
     async def _assert_capacity(
-        self, period: ProviderBudgetPeriod, requested_units: int, now: datetime
+        self, period: ProviderBudgetPeriod, requested_units: int, now: datetime, *, enforce_hourly_limit: bool = True
     ) -> None:
         local_consumed, active_reserved = await self._local_usage(period.provider, period.plan_period)
         local_remaining = period.configured_local_budget - local_consumed - active_reserved
@@ -312,7 +317,7 @@ class ProviderOperationRepository:
         if effective_remaining < requested_units:
             raise AppError("PROVIDER_BUDGET_EXHAUSTED", "Insufficient unreserved SerpApi budget.", 429)
 
-        hourly_limit = _hourly_limit(period)
+        hourly_limit = _hourly_limit(period) if enforce_hourly_limit else None
         if hourly_limit is not None:
             local_hourly, active_hourly = await self._local_usage(
                 period.provider, period.plan_period, now - timedelta(hours=1)
@@ -399,6 +404,12 @@ def _plan_period(snapshot: SerpApiAccountSnapshot | None) -> str:
     if snapshot and snapshot.plan_renewal_date:
         return f"renews-{snapshot.plan_renewal_date.isoformat()}"
     return current_plan_period()
+
+
+def _configured_budget(provider: str) -> int:
+    if provider == "google_places":
+        return settings.google_review_summary_monthly_request_budget
+    return settings.serpapi_monthly_request_budget
 
 
 def _hourly_limit(period: ProviderBudgetPeriod) -> int | None:

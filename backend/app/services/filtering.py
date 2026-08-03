@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 from inspect import cleandoc
 from uuid import UUID
 
@@ -25,6 +27,9 @@ from app.schemas.reviews import (
     ReviewSort,
 )
 from app.services.reviews import review_to_response, topic_to_response
+
+
+logger = logging.getLogger(__name__)
 
 
 class _LLMSelection(BaseModel):
@@ -205,7 +210,9 @@ class ReviewFilterService:
         user = json.dumps(
             {"target_label": target_label, "candidates": candidates_payload}, ensure_ascii=False
         )
-        return await self._run_llm_selection(system, user, {item.id for item in batch})
+        return await self._run_llm_selection(
+            system, user, {item.id for item in batch}, filter_kind="reviewer_label"
+        )
 
     async def _content_batch(self, content_filter: str, batch: list[Review]) -> list[UUID]:
         reviews_payload = [
@@ -231,11 +238,26 @@ class ReviewFilterService:
             Do not include filter, reviews, explanations, markdown, or prose.
         """)
         user = json.dumps({"filter": content_filter, "reviews": reviews_payload}, ensure_ascii=False)
-        return await self._run_llm_selection(system, user, {item.id for item in batch})
+        return await self._run_llm_selection(
+            system, user, {item.id for item in batch}, filter_kind="content"
+        )
 
     async def _run_llm_selection(
-        self, system: str, user: str, allowed_ids: set[UUID]
+        self,
+        system: str,
+        user: str,
+        allowed_ids: set[UUID],
+        *,
+        filter_kind: str = "unknown",
     ) -> list[UUID]:
+        allowed_id_strings = sorted(map(str, allowed_ids))
+        if settings.llm_filter_debug_logging:
+            # The prompt can contain names and review text, so only log opaque review UUIDs.
+            logger.info(
+                "llm_filter_request filter_kind=%s candidate_review_ids=%s",
+                filter_kind,
+                allowed_id_strings,
+            )
         content = await self._chat_completion(system, user)
         try:
             parsed = _LLMSelection.model_validate_json(content)
@@ -250,8 +272,23 @@ class ReviewFilterService:
                 parsed = _LLMSelection.model_validate_json(content)
             except Exception as exc:
                 raise AppError("LLM_INVALID_RESPONSE", "LLM returned invalid filter JSON.", 502) from exc
+        selected_id_strings = [str(item) for item in parsed.selected_review_ids]
+        if settings.llm_filter_debug_logging:
+            logger.info(
+                "llm_filter_response filter_kind=%s selected_review_ids=%s",
+                filter_kind,
+                selected_id_strings,
+            )
         unknown = [item for item in parsed.selected_review_ids if item not in allowed_ids]
         if unknown:
+            logger.warning(
+                "llm_filter_unknown_review_id filter_kind=%s unknown_review_ids=%s "
+                "candidate_review_ids=%s response_sha256=%s",
+                filter_kind,
+                [str(item) for item in unknown],
+                allowed_id_strings,
+                hashlib.sha256(content.encode()).hexdigest(),
+            )
             raise AppError("LLM_UNKNOWN_REVIEW_ID", "LLM returned an unknown review ID.", 502)
         return list(dict.fromkeys(parsed.selected_review_ids))
 

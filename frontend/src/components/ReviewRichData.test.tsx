@@ -21,6 +21,8 @@ it('renders translated known values, safe unknown fields, and hides broken image
   expect(screen.getByLabelText('Review details')).toHaveClass('lg:grid-cols-3')
   const image = screen.getByRole('img', { name: 'Review photo 1' })
   expect(image).toHaveAttribute('referrerpolicy', 'no-referrer')
+  expect(screen.getByLabelText('Review photos')).toHaveClass('min-w-0')
+  expect(screen.getByTestId('review-photo-strip')).toHaveClass('w-full', 'max-w-full', 'overflow-x-auto')
   fireEvent.error(image)
   expect(screen.queryByRole('img', { name: 'Review photo 1' })).not.toBeInTheDocument()
 })

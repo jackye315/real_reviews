@@ -1816,143 +1816,110 @@ The existing generic `Refresh` UI must be separated or renamed so users understa
 - Historical restaurants without relevance data have an explicit fallback state.
 - Tests cover 8/20 pagination boundaries, rank ties/missing ranks, null publication dates, provider cursor expiry, operation cancellation, partial page durability, budget exhaustion, idempotency, snapshot replacement, corpus-version cursors, responsive controls, and zero-cost saved sorting.
 
-## BL-012 — Google review summary and local food recommendations
+## BL-012 — Google review summary and local dish summary
 
-- Status: `Ready`
+- Status: `Done`
 - Area: Restaurant insights, Google Places, local LLM synthesis, persistence, and attribution
 - Priority: Medium
-- Detailed design: [Design document, Section 23](design_doc.md#23-planned-feature-google-review-summary-and-local-food-recommendations)
+- Detailed design: [Design document, Section 23](design_doc.md#23-planned-feature-google-review-summary-and-local-dish-summary)
 
 ### Goal
 
 Add two clearly separate restaurant insights:
 
-1. Google's official AI-generated review summary, fetched on demand from Places API (New) and displayed exactly with Google's required attribution and links.
-2. A locally generated `What reviewers recommend` result that identifies food and drink recommendations from saved canonical reviews and links every recommendation back to supporting reviews.
+1. Google's official AI-generated review-summary backend capability, retained behind its feature gate for a possible future UI. It is not currently exposed in the frontend.
+2. A saved local dish-summary paragraph generated on demand from the review texts currently displayed after the user's active filtering and sorting.
 
-The UI and API must never merge, relabel, or visually imply that the local recommendations were generated or endorsed by Google.
+The UI and API must never merge the two summaries, apply Google's attribution to the local paragraph, or imply that Google generated or endorsed the local result.
 
 ### Verified provider boundary
 
 - Google Places API (New) exposes `reviewSummary` on Place Details (New). It is generated solely from user reviews, may mention specific foods, is not guaranteed for every place, and is billed under the Place Details Enterprise + Atmosphere SKU.
 - Request only `reviewSummary.text`, `reviewSummary.disclosureText`, `reviewSummary.reviewsUri`, and `reviewSummary.flagContentUri` plus the minimum identity field needed by the adapter.
-- A Google review summary is narrative rather than a structured list of recommended dishes. Its text may contain foods, but the application must not parse it into purported Google recommendations or alter it to create the local result.
 - SerpApi's documented `place_results.user_reviews.summary` is an array of selected review excerpts, not the same contract as Google's official AI `reviewSummary`. Do not label those excerpts as a Google review summary.
-- BL-012 does not add an extra SerpApi place-results call. A future SerpApi adapter may be considered only after a live fixture proves a stable official-summary field and all required attribution metadata is available.
-- Local food recommendations use saved canonical reviews and already stored structured review details. They do not require Google or SerpApi calls.
-- Current Google Places policy generally prohibits prefetching, caching, or storing Places content beyond listed exceptions such as Place IDs. The official summary text, disclosure, and action URIs are therefore transient display data and are not written to PostgreSQL, browser storage, a service-worker cache, logs, or operation-result JSON.
+- The local dish summary uses review texts supplied by the current client from the currently displayed review list. It makes no Google or SerpApi request and does not use Google's official summary as model input.
+- Current Google Places policy generally prohibits prefetching, caching, or storing Places content beyond listed exceptions such as Place IDs. The official Google summary text, disclosure, and action URIs are transient display data and are not written to PostgreSQL, browser storage, a service-worker cache, logs, or operation-result JSON.
 
-### Cost and acquisition behavior
+### Explicit acquisition and generation
 
-- Never fetch the Google summary during autocomplete, free-text search, restaurant selection, review-list loading, or ordinary review refresh.
-- Show an explicit `Fetch Google review summary` action when no volatile summary is currently displayed. Before the request, disclose that it is one potentially billable Google Place Details Enterprise + Atmosphere request.
-- Run the request through the existing confirmed, idempotent, persisted operation pattern with `provider=google_places` and `operation_type=google_review_summary`. Do not charge it against the SerpApi allowance.
-- Return a successful summary directly to the requesting client for transient in-memory display. Sorting reviews or paging within the still-mounted restaurant view does not refetch it, but a page reload, place switch, or later session requires another explicit action.
-- Treat a valid response with no `reviewSummary` as an `unavailable` result for that request, not a provider failure and not a reason to fabricate a summary. Persist only non-content operation metadata such as status, request count, timestamp, and stable outcome code.
-- Because the response content cannot be persisted for polling, perform this single upstream request synchronously after reserving budget. Settle and retain the operation/accounting row, but never store the provider response body. The UI prevents double submission while it is pending.
-- A new fetch is always a separate explicit paid action. It replaces only the volatile summary currently shown in the browser; failure leaves any currently displayed in-memory summary untouched.
+- Never fetch the Google summary during autocomplete, free-text search, restaurant selection, review-list loading, ordinary review refresh, filtering, or sorting.
+- Do not currently expose a Google review-summary action in the frontend. The confirmed backend endpoint and attribution validation remain dormant for a future UI.
+- Run that request through the existing confirmed, idempotent, persisted operation pattern with `provider=google_places` and `operation_type=google_review_summary`. Do not charge it against the SerpApi allowance. Use the independent UTC calendar-month `GOOGLE_REVIEW_SUMMARY_MONTHLY_REQUEST_BUDGET=25` safety budget and `GOOGLE_REVIEW_SUMMARY_MAX_CONCURRENCY=1`.
+- Return a successful Google summary directly to the requesting client for transient in-memory display. A valid response without `reviewSummary` is an `unavailable` result, not a provider failure. Persist only non-content accounting and outcome metadata.
+- Generate the local paragraph only when the user presses `Generate summary` or `Replace summary`. Search, selection, review synchronization, load-more, filter changes, sort changes, and navigation never invoke the local LLM automatically.
+- Local generation uses one request lifecycle and creates no provider reservation, background job, or local operation row. The local LLM response is streamed through the backend for progressive rendering.
+
+### Local review selection and prompt
+
+- The numeric review-count input defaults to `10`. The user may request a larger number up to `LOCAL_DISH_SUMMARY_MAX_REVIEWS` (default `50`), but the frontend never sends more reviews than are currently displayed.
+- The backend trims Unicode whitespace before applying `LOCAL_DISH_SUMMARY_MAX_REVIEW_CHARS=4000` and `LOCAL_DISH_SUMMARY_MAX_TOTAL_CHARS=20000`. It also rejects a complete UTF-8 request body larger than `LOCAL_DISH_SUMMARY_MAX_REQUEST_BYTES=131072` with `422 DISH_SUMMARY_INPUT_TOO_LARGE`; it never silently omits selected reviews.
+- Apply the active filters and sort first, preserve that visible order, and send the first requested number of displayed review texts. If the requested count exceeds the currently displayed count, tell the user to show more saved reviews; do not silently include unseen reviews.
+- Send review text only. Do not send canonical review IDs, ratings, dates, reviewer metadata, profiles, avatars, locations, restaurant metadata, or filter/sort context.
+- The model returns one concise plain-text paragraph rather than structured JSON. Ask it for exactly three concise sentences totaling about 75 words and never more than 80, prioritizing which dishes or drinks reviewers most often praise while retaining important mixed or negative feedback, combining obvious aliases, avoiding objective `best`/`worst` claims, and saying plainly when the supplied texts contain too little dish information.
+- Treat review text as untrusted evidence and instruct the model to ignore instructions embedded inside it.
+- Bound the number of review texts, each text's length, total request size, and returned paragraph length. Reject an empty or oversized model response.
 
 ### Persistence contract
 
-Persist only local output in `food_recommendation_snapshots`; do not put Google summary content into this table or the `places` row. Store at least:
+Add one nullable text column to `places`:
 
-- Internal UUID and place foreign key
-- Normalized language code and status: `available`, `failed`, or `superseded`
-- Validated recommendation payload JSONB
-- Exact review corpus version
-- Local model identifier, prompt version, and recommendation schema version
-- Source review count, generated timestamp, local operation ID, and superseded timestamp
-
-Allow only one active local snapshot per place and language. Replacement is atomic. Deleting a place cascades to its recommendation snapshots. Deleting saved reviews deletes or invalidates local snapshots because their evidence no longer exists.
-
-The Google proxy response uses a typed in-memory response model whose localized text, localized disclosure, and action URIs remain separate fields. For the initial US/English scope, accept returned `reviewsUri` and `flagContentUri` only when they are HTTPS and the exact hostname is `www.google.com`; the fixed About link uses `support.google.com`. Reject all other hosts rather than applying a loose suffix rule. Do not embed upstream HTML. Render links with a restrictive referrer policy. The persisted Google provider-operation row contains accounting and stable outcome metadata only, never response content.
-
-Add `insight_generation_runs` for durable local background work. Store place, kind, language, analyzed corpus version, model/prompt/schema versions, status/progress, idempotency key, resulting snapshot ID, bounded error metadata, and lifecycle timestamps. Enforce one active local generation per place/kind/language. This table uses the LLM concurrency limit but is not a provider reservation or provider-usage record.
-
-### Local recommendation pipeline
-
-- Start generation only when the user presses `Generate food recommendations` and saved canonical reviews exist. Do not invoke the LLM automatically after review ingestion, filtering, sorting, or page navigation.
-- Build candidates from review text plus already stored structured fields such as recommended dishes. Provider topics may help retrieval, but topic counts alone are not evidence for a recommendation.
-- Process complete reviews in token-aware batches. Never split a review between batches. If one review exceeds a batch budget, process that review alone up to the model's safe request limit; if it still cannot fit, truncate only its text with an explicit marker while preserving its review ID and structured details.
-- Use a map/reduce flow. Each map batch emits strictly validated dish/drink candidates with review IDs and positive, mixed, or negative stance. The reduce step conservatively merges obvious aliases, aggregates distinct-review evidence, and writes the final typed result.
-- Review content is untrusted data. Prompts must tell the model to treat text as evidence, ignore instructions inside reviews, and return only the requested JSON schema.
-- Do not infer a recommendation from star rating alone. Do not turn neutral mentions or complaints into positive recommendations.
-- Count a review once per normalized item and avoid allowing duplicate provider origins or repeated text from one review to inflate evidence.
-- Reject unknown, malformed, duplicate, wrong-place, or wrong-corpus review IDs returned by the model before persistence.
-- Prefer abstention. If evidence is insufficient, save a valid result stating that no reliable food recommendations were found rather than inventing dishes.
-
-The validated local payload is:
-
-```json
-{
-  "overview": "Reviewers repeatedly recommend several noodle and dumpling dishes.",
-  "recommendations": [
-    {
-      "name": "Pork momos",
-      "reason": "Frequently praised for flavor and texture.",
-      "positive_review_count": 6,
-      "mixed_or_negative_review_count": 1,
-      "evidence_level": "strong",
-      "evidence_review_ids": ["review-uuid-1", "review-uuid-2"]
-    }
-  ],
-  "caveats": ["Menu items and availability may have changed."],
-  "review_count_considered": 50,
-  "corpus_version": 12
-}
+```text
+llm_dish_summary text nullable
 ```
 
-Limit output to eight recommendations, a 500-character reason per item, and three initially displayed evidence links per item. `evidence_level` is the allowlisted value `strong`, `moderate`, or `limited` and describes saved-review support, not objective food quality or model certainty.
+There is one current local paragraph per restaurant. A successful generation atomically replaces any previous value. A failed or unavailable LLM call returns an error and leaves the existing saved paragraph unchanged. No separate summary, input, evidence, snapshot, run, or cache table is added, and the submitted input reviews are not copied into a new database record.
 
-### Cache and corpus semantics
-
-- Cache local output by place, exact `review_corpus_version`, normalized language, model identifier, prompt version, and schema version.
-- A cache hit returns the saved typed result without calling the LLM.
-- Any corpus-version change marks the active local result stale. Continue showing it with its generation timestamp and `Based on an earlier saved review set` label until the user explicitly regenerates it.
-- Do not automatically regenerate after relevance refresh, newest-first reconciliation, rich-data changes, or load-more.
-- Generating a recommendation snapshot does not itself change `review_corpus_version`.
-- If the local LLM is offline, saved local snapshots and any volatile Google result already displayed remain readable. A new local generation fails without replacing the last valid local snapshot.
+The Google proxy response remains transient. Its localized text, localized disclosure, and action URIs stay separate. For the initial US/English scope, accept returned `reviewsUri` and `flagContentUri` only when they use HTTPS and the exact hostname `www.google.com`; the fixed About link uses `support.google.com`. Reject all other hosts, do not embed upstream HTML, and render links with a restrictive referrer policy. The persisted Google provider-operation row contains accounting and stable outcome metadata only, never response content.
 
 ### API contract
 
-- `GET /api/v1/restaurants/{place_id}/insights` is database-only and returns the optional local recommendation snapshot, staleness metadata, and non-content operation metadata. It never returns a saved Google summary and never contacts a provider or the LLM.
-- `POST /api/v1/restaurants/{place_id}/insights/google-review-summary` performs one confirmed synchronous Google request and returns `200` with the transient typed summary or unavailable result plus operation/accounting metadata. The persisted operation row excludes all Places response content.
-- `POST /api/v1/restaurants/{place_id}/insights/food-recommendations` starts a persisted local background generation and returns `202` with a local insight operation ID. It uses LLM concurrency controls but no provider-budget reservation.
-- Local operation polling survives page reload. Google idempotency prevents duplicate billing while a request is active, but completed summary content is not replayed from storage; a later user-approved fetch uses a new key.
-- The successful Google response uses `available` or `unavailable`; `GOOGLE_REVIEW_SUMMARY_UNAVAILABLE` is a stable non-error outcome code. Stable errors distinguish feature disabled, no saved reviews, invalid provider attribution fields, LLM unavailable, invalid model output, stale corpus during generation, and operation conflict.
-
-If the corpus changes while local generation is running, tie any completed run to the version it actually analyzed but do not activate its output. Retain the prior snapshot; if none exists, show no generated result and offer regeneration against the current corpus.
+- The existing restaurant-detail response includes nullable `llm_dish_summary` and never contacts the LLM while reading it.
+- `POST /api/v1/restaurants/{place_id}/dish-summary` accepts a bounded `review_texts: string[]`, calls the configured local LLM synchronously, stores the returned paragraph on the restaurant, and returns `200` with `{"summary": "..."}`.
+- `POST /api/v1/restaurants/{place_id}/dish-summary/stream` accepts the same request and returns newline-delimited `delta`, terminal `done`, or terminal `error` events. It requests OpenAI-compatible upstream streaming with thinking disabled, forwards text deltas immediately, and stores the normalized paragraph only before emitting `done`.
+- The local endpoint does not require review IDs and does not attempt to reconstruct or verify the client's active review filters. It trusts the current client to submit the displayed review texts.
+- If the local LLM is missing, unreachable, times out, or otherwise fails, return `503` with stable code `LLM_UNAVAILABLE` and the message `The local LLM isn't available. Try again later.` Do not erase or replace the prior saved paragraph.
+- `POST /api/v1/restaurants/{place_id}/insights/google-review-summary` remains the separate confirmed synchronous Google request and returns the transient typed provider summary or unavailable result. Google idempotency prevents duplicate billing while an active request is running, but completed content cannot be replayed because it is not stored. Reusing a completed matching key returns `409 GOOGLE_SUMMARY_REPLAY_UNAVAILABLE`; parameter mismatches retain the ordinary idempotency-conflict response.
 
 ### Frontend behavior
 
-- Add a compact `Restaurant insights` area above the topics/filter controls. Avoid an empty bordered container when neither insight exists.
-- Render `Review summary` and `What reviewers recommend` as separate stacked subsections, not one combined summary card.
-- For Google's summary, show the heading exactly as `Review summary`, the complete text exactly as received, the disclosure immediately below it without modification, `About this summary`, `Report summary`, `See reviews`, and Google Maps attribution in the same clearly distinguished container. Do not abbreviate or rewrite the provider text.
-- For local output, label it `Generated locally from saved reviews`, show review count and generation time, and make each recommendation expandable to its supporting saved review cards.
-- Recommendation selection may apply a local supporting-review ID filter, but it must not run a new semantic query or provider request.
-- Show mixed/negative evidence without hiding it. Use restrained evidence labels rather than claiming `best dish`, guaranteed availability, dietary safety, or universal consensus.
-- On mobile, use a single-column expandable layout with no horizontal overflow. Preserve the existing review-list state and scroll position when opening and closing supporting evidence.
-- If no provider summary or local recommendation evidence is available, show a concise inline state and the appropriate explicit action; do not reserve blank space.
+- Place the saved local dish summary and its controls directly above review topics and the review list.
+- Show a numeric `Reviews to include` input defaulting to `10`, bounded by the configured maximum and the number of reviews currently displayed.
+- On wide screens, show the count input and summary action in the same header row as `Local dish summary`, with the paragraph beneath; allow the controls to wrap or stack on narrow screens. Omit explanatory copy about using the first currently loaded reviews.
+- The initial action is `Generate summary`; after a saved paragraph exists it becomes `Replace summary`.
+- The generated paragraph remains the restaurant's saved summary until a later successful replacement. Changing filters, sort, pages, or stored reviews does not automatically clear or regenerate it.
+- While generation is pending, disable duplicate submission and render incoming text deltas with a subtle activity indicator. On a terminal error or disconnect, restore the previous summary, show the inline error, and leave the saved database value unchanged.
+- Label the paragraph `Local dish summary` or equivalently clear local wording. Do not use Google's disclosure, logo, attribution, or visual treatment on it.
+- Keep the review list in an explicitly shrinkable single-column grid (`minmax(0, 1fr)`) and give review cards a zero minimum width so rich review content cannot enlarge the restaurant pane.
+- A review's photo gallery may scroll horizontally inside its own card, but its intrinsic image-row width must never widen the card, review pane, or page.
+- Do not render a Google `Review summary` container, action, or attribution until the dormant feature is explicitly reintroduced in the frontend.
 
-### Privacy, safety, and attribution
+### Logging, privacy, and safety
 
-- Send only the canonical review ID, review text needed for the batch, rating, structured dish details, and normalized publication time to the local LLM. Do not send reviewer profile history, avatar, location, or inferred demographic data.
-- Do not log raw reviews, generated prompts, model output, Google summary prose, or action URLs. Log operation IDs, counts, durations, versions, and stable error codes.
-- Local recommendations are observations from saved public reviews, not professional, allergy, health, or dietary advice. Menu items, ingredients, price, and availability may change.
-- Preserve Google's attribution and review-summary display rules exactly; `About this summary` links to `https://support.google.com/local-listings/answer/9851099`, while local text must not use Google's disclosure, logo treatment, or visual attribution.
-- Keep the official summary only in volatile component/application memory for the current view. Do not place it in `localStorage`, `sessionStorage`, IndexedDB, a query-cache persistence layer, a service-worker cache, analytics, error reporting, or server persistence.
-- Generate local recommendations only from review sources the deployment is permitted to store and transform. Official Places API summary/review content is excluded from local model input. Keep separate `GOOGLE_REVIEW_SUMMARY_ENABLED` and `FOOD_RECOMMENDATIONS_ENABLED` gates; default both off in production until provider-term and attribution review is complete.
+- The application may log the local LLM input review texts and returned paragraph. These logs are not relational input storage, but they are persistent data and must follow the deployment's normal size limits, access controls, rotation, and retention policy.
+- Never log Google's official summary prose, disclosure, action URLs, or raw response body.
+- Do not send reviewer profile/history, avatar, location, inferred demographic data, or Google official summary content to the local LLM.
+- The local paragraph summarizes reviewer opinions; it is not professional, allergy, health, dietary, availability, or menu advice.
+- Keep separate `GOOGLE_REVIEW_SUMMARY_ENABLED` and `LOCAL_DISH_SUMMARY_ENABLED` gates. Default both off in production until provider-term and attribution review is complete; development/test may enable them explicitly. `LOCAL_DISH_SUMMARY_LOG_CONTENT=false` by default; metadata-only logs contain restaurant ID, input count/characters, duration, outcome, and error code.
 
 ### Acceptance criteria
 
-- Opening/searching a restaurant makes no Google summary request and no local recommendation call.
+- Opening, searching, selecting, filtering, sorting, paging, and refreshing a restaurant make no Google-summary or local-summary request.
 - One explicit Google action requests only the allowlisted Place Details fields, is independently cost-accounted, and returns transient content without persisting it.
-- Google summary absence renders a valid unavailable state; a later fetch failure does not clear a summary already held in volatile UI memory.
-- SerpApi review snippets are never presented as Google's AI review summary.
-- Google's full text, disclosure, reviews link, about link, and report link render in the required order without modification.
-- Local generation uses saved reviews only, respects review boundaries and token limits, and makes zero Google/SerpApi requests.
-- Every displayed local recommendation has validated same-place supporting review IDs, and selecting it exposes those saved reviews.
-- Negative/mixed mentions are not converted into positive recommendations; insufficient evidence produces an explicit abstention.
-- Cache keys include corpus/model/prompt/schema versions; stale results are labeled and regeneration is explicit.
-- LLM/provider failures, cancellation, invalid JSON, prompt injection, and corpus changes never replace the last valid snapshot.
-- Tests cover Google presence/absence and attribution fields, Google Maps attribution, host validation, billed-action confirmation/idempotency, absence of Places content from every persistence/cache/log path, map/reduce batching, one oversized review, alias deduplication, duplicate origins, hallucinated IDs, stale local caches, empty evidence, mixed sentiment, responsive rendering, accessibility, and zero-cost database reads.
+- Google summary absence is a valid unavailable state; SerpApi snippets are never presented as Google's official summary.
+- The local control defaults to the first 10 currently displayed reviews in their current filtered and sorted order.
+- The user can request more displayed reviews up to the configured limit; unseen reviews are never silently included.
+- The local request sends review texts without review IDs or filter/sort context, makes zero provider requests, and progressively renders one plain-text paragraph from the local LLM.
+- Successful local generation replaces `places.llm_dish_summary`; no input-review, evidence, snapshot, run, or cache rows are created.
+- Local LLM input and output may appear in bounded rotating logs, but submitted inputs are not duplicated into a database table.
+- An unavailable or failed LLM call returns the defined error, preserves the previous saved paragraph, and does not affect normal review browsing.
+- Tests cover default/custom review counts, visible-order selection, count greater than currently displayed, input/output bounds, plain-text generation, replacement, persistence across reopening a restaurant, failure preservation, prompt injection language, responsive controls, and zero implicit calls.
+- Responsive browser tests render a review containing at least seven fixed-width photos and verify that the review pane and card do not overflow while the photo strip itself remains horizontally scrollable. Component tests also protect the grid/card/gallery shrink constraints.
+- Tests also cover Google presence/absence, exact attribution rendering, malicious hostname rejection, confirmed billing/idempotency, and absence of Google summary content from persistence and logs.
+
+### Completion notes
+
+- Added the `places.llm_dish_summary` migration and local summary endpoint with bounded, synchronous plain-text LLM generation that preserves the prior paragraph on failure.
+- Added transient Google Place Details review-summary retrieval with exact `www.google.com` HTTPS action-link validation, explicit `languageCode=en`/`regionCode=US`, independent monthly reservation/accounting, and non-replayable completed idempotency keys.
+- Added responsive local dish-summary controls above review topics, visible-order selection from loaded reviews, and backend/frontend regression coverage. The Google endpoint remains intentionally dormant with no frontend action.
+- Added OpenAI-compatible local-LLM streaming through an NDJSON backend endpoint; the UI renders deltas immediately and persistence occurs only after the terminal paragraph validates successfully.
+- Constrained rich review cards to the available pane width and kept multi-photo overflow inside the gallery. Added a seven-photo responsive regression fixture that checks page, pane, card, and gallery geometry across desktop, phone, and tablet layouts.

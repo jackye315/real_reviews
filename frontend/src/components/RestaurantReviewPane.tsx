@@ -5,6 +5,7 @@ import { ReviewFilters } from './ReviewFilters'
 import { ReviewList } from './ReviewList'
 import { ReviewTopicChips } from './ReviewTopicChips'
 import { ReviewerPane } from './ReviewerPane'
+import { RestaurantInsights } from './RestaurantInsights'
 import type { ReviewFiltersProps, WorkspaceProps } from '../types/ui'
 
 export function RestaurantReviewPane({
@@ -193,6 +194,7 @@ export function RestaurantReviewPane({
         />
       ) : <>
         <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-4 sm:px-6">
+          <RestaurantInsights placeId={selectedPlace.google_place_id} initialDishSummary={selectedPlace.llm_dish_summary} visibleReviews={visibleReviews} />
           {hasReviews && <ReviewTopicChips topics={topics} disabled={filterPending} onSelect={selectTopic} />}
           <ReviewList reviews={visibleReviews} loading={reviewsQuery.isLoading} total={effectiveTotal} filteredTotal={effectiveFilteredTotal} exactRating={exactRating} onOpenReviewer={onOpenReviewer} />
           {savedHasMore && <button type="button" onClick={onShowMoreSaved} disabled={savedMorePending} className="min-h-11 rounded-xl border border-[#CFC6BA] px-4 py-2 text-sm font-semibold disabled:opacity-50">{savedMorePending ? 'Loading saved reviews…' : 'Show more saved reviews'}</button>}

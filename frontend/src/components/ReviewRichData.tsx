@@ -80,8 +80,8 @@ function ReviewImageGallery({ images }: { images: ReviewImage[] }) {
   const visible = images.filter((image) => !broken.has(image.url))
   if (!visible.length) return null
   return (
-    <section className="mt-2" aria-label="Review photos">
-      <div className="flex snap-x gap-2 overflow-x-auto pb-1">
+    <section className="mt-2 min-w-0" aria-label="Review photos">
+      <div data-testid="review-photo-strip" className="flex w-full max-w-full snap-x gap-2 overflow-x-auto pb-1">
         {visible.map((image, index) => (
           <img
             key={`${image.url}-${image.position}`}

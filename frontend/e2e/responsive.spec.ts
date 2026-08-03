@@ -22,6 +22,7 @@ test('landing, results, reviews, filters, and back navigation avoid horizontal o
   await expect(reviewPane.getByText(/great outdoor seating/i)).toBeVisible()
   await expect(reviewPane.getByLabel('Review details')).toBeVisible()
   await expect(reviewPane.getByLabel('5 out of 5 stars')).toHaveText('5 ★★★★★')
+  await expectReviewGalleryOverflowContained(reviewPane)
   await expectNoHorizontalOverflow(page)
 
   if (isDesktop) {
@@ -59,5 +60,17 @@ test('manifest and mobile metadata are available', async ({ page }) => {
 })
 
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
-  await expect.poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expect.poll(async () => page.evaluate(() => (
+    document.documentElement.scrollWidth <= window.innerWidth
+    && Array.from(document.querySelectorAll<HTMLElement>('[data-testid="review-pane"]'))
+      .every((pane) => pane.scrollWidth <= pane.clientWidth)
+  ))).toBe(true)
+}
+
+async function expectReviewGalleryOverflowContained(reviewPane: import('@playwright/test').Locator) {
+  const card = reviewPane.getByRole('article')
+  const photoStrip = reviewPane.getByTestId('review-photo-strip')
+  await expect(photoStrip.getByRole('img')).toHaveCount(7)
+  await expect.poll(async () => card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await expect.poll(async () => photoStrip.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
 }

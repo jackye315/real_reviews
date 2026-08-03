@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import Field, field_validator
 
@@ -59,3 +60,34 @@ class RestaurantDetailResponse(APIModel):
     place: PlaceResponse
     stored_review_count: int
     last_fetch_time: str | None = None
+
+
+class DishSummaryRequest(APIModel):
+    review_texts: list[str] = Field(min_length=1, max_length=50)
+
+
+class DishSummaryResponse(APIModel):
+    summary: str
+
+
+class GoogleReviewSummaryRequest(APIModel):
+    confirm_cost: bool = False
+
+
+class GoogleSummaryLocalizedText(APIModel):
+    text: str
+    language_code: str | None = None
+
+
+class GoogleReviewSummaryOperation(APIModel):
+    id: UUID
+    settled_units: int
+
+
+class GoogleReviewSummaryResponse(APIModel):
+    status: Literal["available", "unavailable"]
+    text: GoogleSummaryLocalizedText | None = None
+    disclosure: GoogleSummaryLocalizedText | None = None
+    reviews_uri: str | None = None
+    flag_content_uri: str | None = None
+    operation: GoogleReviewSummaryOperation

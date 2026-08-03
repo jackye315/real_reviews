@@ -43,7 +43,11 @@ const review = {
     accessibility: 'Step-free entrance and accessible seating'
   },
   translated_details: {},
-  images: [],
+  images: Array.from({ length: 7 }, (_, index) => ({
+    url: `https://images.example/review-photo-${index + 1}.svg`,
+    position: index,
+    provider: 'serpapi'
+  })),
   last_seen_at: new Date(0).toISOString(),
   first_seen_at: new Date(0).toISOString()
 }
@@ -55,6 +59,11 @@ export async function mockApi(
   options: { reviewerContext?: ReviewerContextFixture } = {}
 ) {
   await page.route('**/maps/api/js**', (route) => route.abort())
+  await page.route('**/review-photo-*.svg', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="112"><rect width="144" height="112" fill="#DED8CE"/></svg>'
+  }))
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
