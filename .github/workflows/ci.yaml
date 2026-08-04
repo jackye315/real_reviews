@@ -32,7 +32,7 @@ jobs:
           # for envsubst to substitute. Compose interpolating it ($$ -> $ bug)
           # re-breaks the nginx template rendering.
           docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config \
-            | grep -Fq "envsubst '\$\$${APP_DOMAIN}'"
+            | grep -Fq "envsubst '\$\${APP_DOMAIN}'"
       - name: Validate nginx production template renders and passes nginx -t
         run: |
           mkdir -p /tmp/rr-letsencrypt/live/reviews.example.com
