@@ -536,8 +536,8 @@ Use pnpm with:
 Application dependencies will be added through a container:
 
 ```bash
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm frontend pnpm add <package>
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm frontend pnpm add --save-dev <package>
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm frontend pnpm add <package>
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm frontend pnpm add --save-dev <package>
 ```
 
 The host workspace must never contain a frontend `node_modules` directory.
@@ -557,8 +557,8 @@ Use uv with:
 Backend dependencies will be added through a container:
 
 ```bash
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm api uv add <package>
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm api uv add --dev <package>
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm api uv add <package>
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm api uv add --dev <package>
 ```
 
 The host workspace must never contain a backend `.venv` directory.
@@ -577,8 +577,8 @@ Migration commands will run through the dedicated service:
 
 ```bash
 make migrate
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm migrate uv run alembic revision --autogenerate -m "describe change"
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml run --rm migrate uv run alembic downgrade -1
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm migrate uv run alembic revision --autogenerate -m "describe change"
+docker compose -f docker/compose.yaml -f docker/compose.dev.yaml run --rm migrate uv run alembic downgrade -1
 ```
 
 Generated Alembic migration files are committed to source control. PostgreSQL data remains in a named Docker volume.
@@ -589,7 +589,7 @@ Keep production-capable separation from the beginning:
 
 ```text
 docker/compose.yaml
-docker/compose.override.yaml
+docker/compose.dev.yaml
 docker/compose.prod.yaml
 
 frontend/
@@ -614,7 +614,7 @@ backend/
 - Environment-file references
 - Service dependencies
 
-`docker/compose.override.yaml` is explicitly merged by the root `Makefile` for local development and adds:
+`docker/compose.dev.yaml` is explicitly merged by the root `Makefile` for local development and adds:
 
 - Source-code bind mounts
 - Vite and FastAPI hot reload
@@ -646,7 +646,7 @@ Validate every merged configuration with:
 
 ```bash
 make config
-make prod-config
+make config-prod
 ```
 
 ### 4.7 Container-only development workflow
@@ -1392,7 +1392,7 @@ Implemented root project files:
 - `.env.example` containing all frontend, backend, provider, database, LLM, and cost-control configuration keys.
 - `.gitignore` excluding local secrets, host dependency folders, caches, build output, and editor artifacts.
 - `docker/compose.yaml` as the canonical base Compose file.
-- `docker/compose.override.yaml` for local development hot reload, development ports, and named dependency volumes.
+- `docker/compose.dev.yaml` for local development hot reload, development ports, and named dependency volumes.
 - `docker/compose.prod.yaml` for production-like image targets and runtime commands.
 - Root `Makefile` wrapping the standard Docker Compose commands, including `make up`, `make down`, and `make down-volumes`.
 
@@ -1551,12 +1551,12 @@ Frontend behavior implemented:
 The following checks were run successfully:
 
 - `make config`
-- `make prod-config`
+- `make config-prod`
 - Backend image build for `api` and `migrate`.
 - Frontend production build through the Docker `build` target.
 - `docker run --rm real-reviews-api uv run ruff check .`
-- `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d api` followed by `GET /health` returning database `ok`.
-- `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d frontend` followed by successful HTTP response from `http://localhost:5173`.
+- `docker compose -f docker/compose.yaml -f docker/compose.dev.yaml up -d api` followed by `GET /health` returning database `ok`.
+- `docker compose -f docker/compose.yaml -f docker/compose.dev.yaml up -d frontend` followed by successful HTTP response from `http://localhost:5173`.
 - A smoke test for `POST /api/v1/restaurants/selection` and `GET /api/v1/restaurants/{place_id}/reviews`.
 
 ### 16.9 Follow-up implementation from audit feedback
@@ -1763,15 +1763,15 @@ The following items remain open after the follow-up implementation:
 The follow-up implementation was verified with:
 
 - `make config`
-- `make prod-config` with production environment variables supplied.
+- `make config-prod` with production environment variables supplied.
 - Development backend/frontend/migration image builds.
 - Production backend/frontend/migration image builds.
 - `docker run --rm real-reviews-api-dev uv run ruff check .`
 - `docker run --rm real-reviews-api-dev uv run pytest`
 - `docker run --rm real-reviews-frontend-dev pnpm test`
 - Frontend production Docker `build` target.
-- `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d api` followed by `GET /health` returning database `ok` from a fresh PostgreSQL volume.
-- `docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d frontend` followed by a successful HTTP response from `http://localhost:5173`.
+- `docker compose -f docker/compose.yaml -f docker/compose.dev.yaml up -d api` followed by `GET /health` returning database `ok` from a fresh PostgreSQL volume.
+- `docker compose -f docker/compose.yaml -f docker/compose.dev.yaml up -d frontend` followed by a successful HTTP response from `http://localhost:5173`.
 
 ## 17. Planned Feature: On-Demand Reviewer Context
 

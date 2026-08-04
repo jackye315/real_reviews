@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     restart: unless-stopped
@@ -6,15 +12,28 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports: []
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   migrate:
     image: real-reviews-migrate-prod
     build:
       context: ../backend
       target: production
+    env_file: !reset []
     environment:
       DATABASE_URL: ${DATABASE_URL}
     restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   api:
     image: real-reviews-api-prod
@@ -22,17 +41,29 @@ services:
       context: ../backend
       target: production
     environment:
+      ENVIRONMENT: production
       DATABASE_URL: ${DATABASE_URL}
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+      FRONTEND_ORIGIN: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      REVIEW_CURSOR_SIGNING_KEY: ${REVIEW_CURSOR_SIGNING_KEY:?Set REVIEW_CURSOR_SIGNING_KEY in .env}
       GOOGLE_MAPS_SERVER_API_KEY: ${GOOGLE_MAPS_SERVER_API_KEY}
       SERPAPI_API_KEY: ${SERPAPI_API_KEY}
       SERPAPI_LANGUAGE: ${SERPAPI_LANGUAGE:-en}
-      REVIEWER_CONTEXT_ENABLED: ${REVIEWER_CONTEXT_ENABLED:-false}
+      REVIEWER_CONTEXT_ENABLED: "false"
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_MODEL: ${LLM_MODEL}
       LLM_API_KEY: ${LLM_API_KEY}
+      LLM_FILTER_DEBUG_LOGGING: "false"
+      LOCAL_DISH_SUMMARY_LOG_CONTENT: "false"
     restart: unless-stopped
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   frontend:
     image: real-reviews-frontend-prod
@@ -40,15 +71,126 @@ services:
       context: ../frontend
       target: production
       args:
-        VITE_REVIEWER_CONTEXT_ENABLED: ${VITE_REVIEWER_CONTEXT_ENABLED:-false}
+        VITE_REVIEWER_CONTEXT_ENABLED: "false"
+        VITE_GOOGLE_MAPS_BROWSER_API_KEY: ${VITE_GOOGLE_MAPS_BROWSER_API_KEY:-}
+    env_file: !reset []
     environment:
       VITE_API_BASE_URL: /api/v1
     restart: unless-stopped
-    ports:
-      - "8080:80"
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    expose:
+      - "80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
+
+  proxy:
+    image: nginx:1.30.4-alpine
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+    ports:
+      - "${TAILSCALE_IP:?Set TAILSCALE_IP in .env}:80:80"
+      - "${TAILSCALE_IP:?Set TAILSCALE_IP in .env}:443:443"
+    volumes:
+      - type: bind
+        source: ./nginx-prod.conf.template
+        target: /etc/nginx/templates/default.conf.template
+        read_only: true
+        bind:
+          create_host_path: false
+      - letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - real_reviews
+    depends_on:
+      frontend:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    # The nginx image only envsubst-renders /etc/nginx/templates when the
+    # container command starts with `nginx`. Because we override the command
+    # (periodic reload for renewed certs), render the template here explicitly.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        envsubst '$${APP_DOMAIN}' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
+        (while :; do sleep 6h; nginx -s reload; done) &
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  certbot-renew:
+    image: certbot/dns-cloudflare:v5.7.0
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - type: bind
+        source: ${CLOUDFLARE_CREDENTIALS_FILE:?Set CLOUDFLARE_CREDENTIALS_FILE in .env}
+        target: /run/secrets/cloudflare.ini
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        trap exit TERM
+        while :; do
+          if certbot renew --quiet; then
+            date +%s > /tmp/certbot-last-success
+          fi
+          sleep 12h & wait $$!
+        done
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/certbot-last-success && test \"$$(( $$(date +%s) - $$(cat /tmp/certbot-last-success) ))\" -lt 90000"]
+      interval: 1h
+      timeout: 10s
+      retries: 2
+      start_period: 2m
+
+  certbot:
+    image: certbot/dns-cloudflare:v5.7.0
+    profiles: ["tools"]
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - type: bind
+        source: ${CLOUDFLARE_CREDENTIALS_FILE:?Set CLOUDFLARE_CREDENTIALS_FILE in .env}
+        target: /run/secrets/cloudflare.ini
+        read_only: true
+        bind:
+          create_host_path: false
+    command:
+      - certonly
+      - --dns-cloudflare
+      - --dns-cloudflare-credentials
+      - /run/secrets/cloudflare.ini
+      - --dns-cloudflare-propagation-seconds
+      - "30"
+      - --domain
+      - ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      - --cert-name
+      - ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      - --email
+      - ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+      - --agree-tos
+      - --non-interactive
+      - --keep-until-expiring
+
+volumes:
+  letsencrypt:

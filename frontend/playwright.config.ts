@@ -33,6 +33,11 @@ export default defineConfig({
       use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } }
     },
     {
+      name: 'prod-smoke',
+      testMatch: /prod-smoke\.spec\.ts/,
+      use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } }
+    },
+    {
       name: 'webkit-mobile-smoke',
       testMatch: /webkit-smoke\.spec\.ts/,
       use: { ...devices['iPhone 12'], browserName: 'webkit', viewport: { width: 390, height: 844 } }

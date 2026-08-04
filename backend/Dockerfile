@@ -15,5 +15,7 @@ CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "800
 
 FROM base AS production
 RUN uv sync --locked --no-dev
-COPY . .
+RUN useradd --uid 10001 --user-group --create-home --shell /usr/sbin/nologin app
+COPY --chown=app:app . .
+USER app
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -6,6 +6,7 @@ Personal restaurant review research tool using local LLM for better filtering. M
 
 - [`design_doc.md`](design_doc.md) describes the current product boundaries, architecture, implemented behavior, and known implementation work.
 - [`backlog.md`](backlog.md) is the source of truth for intentionally deferred features and future ideas.
+- [`docs/private-https-deployment.md`](docs/private-https-deployment.md) covers the Tailscale-only Oracle/Cloudflare HTTPS deployment.
 
 Add future feature requests to `backlog.md`. A backlog item is not implemented unless its status says `Done`.
 
@@ -53,11 +54,7 @@ LLM_API_KEY=
 make up
 ```
 
-`make up` builds the images and runs the stack in the foreground. To run it in the background instead:
-
-```bash
-make up-detached
-```
+`make up` builds the images and starts the development stack in the background.
 
 Open:
 
@@ -104,7 +101,15 @@ make migrate
 make api-lint
 make frontend-test
 make frontend-e2e
+make frontend-e2e-prod   # Playwright smoke test against the production image
 make down
 ```
 
 The test and lint commands use containerized dependencies. Keep `frontend/node_modules` and `backend/.venv` in Docker volumes only.
+
+`make frontend-e2e-prod` builds the production frontend image and runs the
+`prod-smoke` Playwright spec against it. It guards prod-only regressions the dev
+e2e cannot see: the served CSP blocking Google Maps resources (fonts, icons,
+Places autocomplete API) and `VITE_GOOGLE_MAPS_BROWSER_API_KEY` not being baked
+into the bundle. It uses the browser key from `.env` when present and falls back
+to a dummy value otherwise; it needs outbound network to Google.

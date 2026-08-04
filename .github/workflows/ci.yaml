@@ -12,20 +12,62 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Validate Compose config
         run: |
-          docker compose -f docker/compose.yaml -f docker/compose.override.yaml config >/tmp/compose.yaml
-          POSTGRES_USER=real_reviews \
-          POSTGRES_PASSWORD=real_reviews \
-          POSTGRES_DB=real_reviews \
-          DATABASE_URL=postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews \
-          FRONTEND_ORIGIN=http://localhost:8080 \
-          GOOGLE_MAPS_SERVER_API_KEY=dummy \
-          SERPAPI_API_KEY=dummy \
-          LLM_BASE_URL=http://llm.example/v1 \
-          LLM_MODEL=dummy \
-          LLM_API_KEY=dummy \
-          docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config >/tmp/compose-prod.yaml
+          docker compose -f docker/compose.yaml -f docker/compose.dev.yaml config --quiet
+          export POSTGRES_USER=real_reviews \
+            POSTGRES_PASSWORD=real_reviews \
+            POSTGRES_DB=real_reviews \
+            DATABASE_URL=postgresql+psycopg://real_reviews:real_reviews@postgres:5432/real_reviews \
+            APP_DOMAIN=reviews.example.com \
+            TAILSCALE_IP=100.64.0.1 \
+            ACME_EMAIL=ci@example.com \
+            CLOUDFLARE_CREDENTIALS_FILE=/tmp/cloudflare.ini \
+            REVIEW_CURSOR_SIGNING_KEY=ci-review-cursor-signing-key \
+            GOOGLE_MAPS_SERVER_API_KEY=dummy \
+            SERPAPI_API_KEY=dummy \
+            LLM_BASE_URL=http://llm.example/v1 \
+            LLM_MODEL=dummy \
+            LLM_API_KEY=dummy
+          docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config --quiet
+          # The proxy command must reach the container with a literal ${APP_DOMAIN}
+          # for envsubst to substitute. Compose interpolating it ($$ -> $ bug)
+          # re-breaks the nginx template rendering.
+          docker compose -f docker/compose.yaml -f docker/compose.prod.yaml config \
+            | grep -Fq "envsubst '\$\$${APP_DOMAIN}'"
+      - name: Validate nginx production template renders and passes nginx -t
+        run: |
+          mkdir -p /tmp/rr-letsencrypt/live/reviews.example.com
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/rr-letsencrypt/live/reviews.example.com/privkey.pem \
+            -out /tmp/rr-letsencrypt/live/reviews.example.com/fullchain.pem \
+            -days 1 -subj '/CN=reviews.example.com' >/dev/null 2>&1
+          docker run --rm \
+            -v "$PWD/docker/nginx-prod.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            -v /tmp/rr-letsencrypt:/etc/letsencrypt:ro \
+            -e APP_DOMAIN=reviews.example.com \
+            nginx:1.30.4-alpine nginx -t
+      - name: Guard production CSP allows Google Maps resources
+        run: |
+          for file in frontend/nginx.conf docker/nginx-prod.conf.template; do
+            for origin in fonts.googleapis.com maps.gstatic.com places.googleapis.com fonts.gstatic.com; do
+              grep -q "$origin" "$file" || { echo "FAIL: CSP in $file does not allow $origin"; exit 1; }
+            done
+          done
+      - name: Verify browser Maps key is baked into the production bundle
+        run: |
+          docker build --target production \
+            --build-arg VITE_REVIEWER_CONTEXT_ENABLED=false \
+            --build-arg VITE_GOOGLE_MAPS_BROWSER_API_KEY=ci-dummy-key-check \
+            -t real-reviews-frontend-keycheck ./frontend
+          docker run --rm real-reviews-frontend-keycheck \
+            sh -c 'grep -rq ci-dummy-key-check /usr/share/nginx/html/assets/'
       - name: Build development images
-        run: docker compose -f docker/compose.yaml -f docker/compose.override.yaml build api migrate frontend
+        run: docker compose -f docker/compose.yaml -f docker/compose.dev.yaml build api migrate frontend
+      - name: Build production images
+        run: |
+          docker build --target production -t real-reviews-api-prod-ci ./backend
+          docker build --target production -t real-reviews-frontend-prod-ci ./frontend
+      - name: Validate operational scripts
+        run: bash -n scripts/check-prod.sh scripts/smoke-prod.sh
       - name: Backend lint and tests
         run: |
           docker run --rm real-reviews-api-dev uv run ruff check .
@@ -34,3 +76,5 @@ jobs:
         run: |
           docker build --target build -t real-reviews-frontend-build ./frontend
           docker run --rm real-reviews-frontend-dev pnpm test
+      - name: Run production frontend Playwright smoke test
+        run: SMOKE_KEY=ci-dummy-smoke-key bash scripts/smoke-prod.sh

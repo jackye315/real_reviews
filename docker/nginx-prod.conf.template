@@ -1,0 +1,65 @@
+server {
+  listen 80 default_server;
+  server_name ${APP_DOMAIN};
+
+  allow 127.0.0.1;
+  allow 100.64.0.0/10;
+  deny all;
+
+  return 308 https://${APP_DOMAIN}$request_uri;
+}
+
+server {
+  listen 443 ssl default_server;
+  server_name ${APP_DOMAIN};
+
+  resolver 127.0.0.11 valid=30s ipv6=off;
+  set $api_upstream api:8000;
+  set $frontend_upstream frontend:80;
+
+  ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_cache shared:TLS:10m;
+  ssl_session_timeout 1d;
+  ssl_session_tickets off;
+  server_tokens off;
+
+  allow 127.0.0.1;
+  allow 100.64.0.0/10;
+  deny all;
+
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+  add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=()" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://maps.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://places.googleapis.com; img-src 'self' data: https://maps.gstatic.com https://lh3.googleusercontent.com https://lh4.googleusercontent.com https://lh5.googleusercontent.com https://lh6.googleusercontent.com; font-src 'self' https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" always;
+
+  location /api/ {
+    proxy_pass http://$api_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 120s;
+  }
+
+  location = /health {
+    proxy_pass http://$api_upstream/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+
+  location / {
+    proxy_pass http://$frontend_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+}
